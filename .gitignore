@@ -1,0 +1,17 @@
+# python
+__pycache__/
+*.pyc
+
+# environment
+.env
+.env.*
+
+# ide
+.idea/
+
+# data
+data/
+
+# vector index
+*.faiss
+*.pkl
