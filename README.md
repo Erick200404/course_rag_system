@@ -9,3 +9,20 @@
 
 **4. 第一版功能**
  PDF 解析、文本切分、向量检索、问答生成、引用溯源。
+
+## Roadmap
+
+- [x] PDF loader
+- [x] Text splitter
+- [ ] Embedding module
+- [ ] Vector store (FAISS)
+- [ ] Retriever
+- [ ] RAG pipeline
+- [ ] Streamlit UI
+- [ ] Hybrid retrieval (BM25 + Vector)
+- [ ] Reranker
+### pdf_loader.py
+目前只能做文本pdf的识别，待完善
+
+### text_split.py
+目前的逻辑是按字符硬切，对目录页不友好，可能把语义切断，待完善
