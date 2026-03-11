@@ -10,6 +10,12 @@
 **4. 第一版功能**
  PDF 解析、文本切分、向量检索、问答生成、引用溯源。
 
+## 快速启动
+请在anconda prompt中输入
+E:
+cd E:\pycharm_workspace\course_rag_system
+conda activate course_rag
+
 ## Roadmap
 
 - [x] PDF loader
