@@ -14,7 +14,7 @@
 
 - [x] PDF loader
 - [x] Text splitter
-- [ ] Embedding module
+- [x] Embedding module
 - [ ] Vector store (FAISS)
 - [ ] Retriever
 - [ ] RAG pipeline
@@ -26,3 +26,6 @@
 
 ### text_split.py
 目前的逻辑是按字符硬切，对目录页不友好，可能把语义切断，待完善
+
+### embeddings.py
+目前是直接用的text-embedding-3-small，后续考虑使用本地部署的模型
