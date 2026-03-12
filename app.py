@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -70,11 +71,20 @@ def get_storage_paths(pdf_path: str) -> tuple[str, str]:
         index_path: FAISS 索引文件路径
         metadata_path: metadata 文件路径
     """
+
+    """
+        根据 PDF 文件名生成对应的索引存储路径。
+        过滤中文字符，避免 FAISS 在 Windows 下报错。
+    """
+
     # 取文件名（不带后缀），例如 test.pdf -> test
     pdf_name = Path(pdf_path).stem
 
+    # 只保留字母和数字
+    safe_name = re.sub(r"[^a-zA-Z0-9]", "_", pdf_name)
+
     # 为每个 PDF 单独建立一个存储目录
-    storage_dir = os.path.join("storage", pdf_name)
+    storage_dir = os.path.join("storage", safe_name)
 
     # FAISS 索引文件路径
     index_path = os.path.join(storage_dir, "faiss_index.bin")
