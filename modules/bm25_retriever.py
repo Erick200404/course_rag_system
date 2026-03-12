@@ -1,5 +1,6 @@
 from typing import List, Dict
 from rank_bm25 import BM25Okapi
+import jieba   # 新增：中文分词
 
 
 class BM25Retriever:
@@ -23,9 +24,12 @@ class BM25Retriever:
         # 从 metadata 中提取文本
         corpus = [item["text"] for item in metadata]
 
-        # BM25 需要先对文本进行简单分词
-        # 这里使用最简单的 split
-        tokenized_corpus = [doc.split() for doc in corpus]
+        # ==========================
+        # 修改：使用 jieba 中文分词
+        # ==========================
+        # 如果直接使用 split()，中文基本不会被正确切分
+        # jieba 可以把句子切成更合理的词
+        tokenized_corpus = [list(jieba.cut(doc)) for doc in corpus]
 
         # 构建 BM25 索引
         self.bm25 = BM25Okapi(tokenized_corpus)
@@ -39,8 +43,10 @@ class BM25Retriever:
             top_k: 返回最相关的 chunk 数量
         """
 
-        # query 分词
-        tokenized_query = query.split()
+        # ==========================
+        # 修改：query 也使用 jieba 分词
+        # ==========================
+        tokenized_query = list(jieba.cut(query))
 
         # 获取 BM25 得分
         scores = self.bm25.get_scores(tokenized_query)
@@ -55,8 +61,12 @@ class BM25Retriever:
         results = []
 
         for idx, score in ranked[:top_k]:
+
             item = self.metadata[idx].copy()
+
+            # 添加 BM25 得分（方便调试）
             item["bm25_score"] = float(score)
+
             results.append(item)
 
         return results
