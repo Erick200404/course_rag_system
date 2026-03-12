@@ -7,3 +7,4 @@ sentence-transformers
 python-dotenv
 openai
 rank-bm25
+sentence-transformers

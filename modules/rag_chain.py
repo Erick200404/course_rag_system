@@ -5,6 +5,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from modules.hybrid_retriever import hybrid_retrieve
+from modules.reranker import rerank_chunks
 
 # 加载环境变量
 load_dotenv()
@@ -35,21 +36,28 @@ def build_context(retrieved_chunks: List[Dict]) -> str:
 def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
-    1. 根据问题检索相关 chunks
-    2. 拼接上下文
-    3. 调用大模型生成答案
+    1. 使用 Hybrid Retrieval 召回候选 chunks
+    2. 使用 Reranker 对候选 chunks 进行重排序
+    3. 拼接上下文
+    4. 调用大模型生成答案
     """
 
-    # 使用 Hybrid Retrieval 混合检索：
-    # 一路走向量检索（FAISS），一路走 BM25 关键词检索
-    # 然后将两路结果合并去重
-    retrieved_chunks = hybrid_retrieve(
+    # 第一步：先用 Hybrid Retrieval 召回更多候选片段
+    # 这里先召回 10 个候选结果，给后续 Reranker 提供重排空间
+    candidate_chunks = hybrid_retrieve(
         question=query,
         index=index,
         metadata=metadata,
         top_k_vector=5,
         top_k_bm25=5,
-        final_top_k=top_k
+        final_top_k=10
+    )
+
+    # 第二步：对候选结果进行重排序，选出最终最相关的 top_k 个 chunk
+    retrieved_chunks = rerank_chunks(
+        query=query,
+        retrieved_chunks=candidate_chunks,
+        top_k=top_k
     )
 
     # 将召回内容拼成 context
