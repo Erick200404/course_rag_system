@@ -27,6 +27,7 @@ v1.0
 - [x] Streamlit UI
 -----------------------------
 v2.0
+- [x] 修改Vector store，实现数据持久化
 - [ ] Hybrid retrieval (BM25 + Vector)
 - [ ] Reranker
 ### pdf_loader.py
@@ -39,7 +40,8 @@ v2.0
 目前是直接用的text-embedding-3-small，后续考虑使用本地部署的模型
 
 ### vector_store.py
-把这些向量放进 FAISS 里，后面用户提问时就能查最相近的 chunk
+v1.0 把这些向量放进 FAISS 里，后面用户提问时就能查最相近的 chunk  
+v2.0 考虑把向量保存到数据库里，方便后续查询
 
 ### retriever.py
 根据用户问题，在 FAISS 中检索最相近的 top-k 个 chunk
@@ -48,4 +50,5 @@ v2.0
 把召回的 chunk 拼成上下文，发给聊天模型，让它回答。即实现RAG问答链路，结合检索结果调用大模型生成答案
 
 ### run.py
-使用Streamlit UI构建前端
+使用Streamlit UI构建前端  
+接入索引复用功能
