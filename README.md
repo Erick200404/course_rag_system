@@ -29,7 +29,11 @@ v1.0
 v2.0
 - [x] 修改Vector store，实现数据持久化
 - [x] Hybrid retrieval (BM25 + Vector)
-- [ ] Reranker
+- [x] Reranker
+-------------------------------------------------
+v3.0
+- [ ] 修改text_split切分方式
+
 ### pdf_loader.py
 目前只能做文本pdf的识别，待完善
 

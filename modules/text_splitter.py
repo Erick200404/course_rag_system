@@ -1,4 +1,5 @@
 from typing import List, Dict
+import re   # 新增：用于正则切分段落和句子
 
 
 def split_text(
@@ -59,38 +60,141 @@ def split_text(
         if not text.strip():
             continue
 
-        # 文本长度
-        text_length = len(text)
+        # =========================
+        # 新增逻辑：优先按段落切分
+        # =========================
+        # 两个及以上换行视为段落分隔
+        paragraphs = re.split(r"\n\s*\n+", text)
 
-        # 从第0个字符开始切
-        start = 0
+        # 遍历每个段落
+        for para in paragraphs:
 
-        # 只要 start 没超过文本长度，就继续切
-        while start < text_length:
+            # 去掉首尾空白
+            para = para.strip()
 
-            # 当前 chunk 的结束位置
-            end = start + chunk_size
+            # 如果段落为空，跳过
+            if not para:
+                continue
 
-            # 取出当前 chunk 文本
-            chunk_text = text[start:end].strip()
+            # 如果段落长度本身就小于 chunk_size，直接作为 chunk
+            if len(para) <= chunk_size:
 
-            # 如果 chunk 不为空
-            if chunk_text:
                 chunks.append(
                     {
-                        "chunk_id": chunk_id,   # 当前 chunk 编号
-                        "text": chunk_text,     # chunk 内容
-                        "page": page,           # 页码
-                        "source": source        # 来源文件
+                        "chunk_id": chunk_id,
+                        "text": para,
+                        "page": page,
+                        "source": source
                     }
                 )
 
-                # chunk编号+1
                 chunk_id += 1
 
-            # 下一块开始的位置
-            # 减去 overlap 是为了让两个 chunk 有重叠
-            start += chunk_size - chunk_overlap
+                continue
+
+            # =========================
+            # 新增逻辑：段落太长 → 按句子切
+            # =========================
+            # 使用中文和英文句号等符号进行句子切分
+            sentences = re.split(r'(?<=[。！？!?\.])', para)
+
+            current_chunk = ""
+
+            # 遍历句子
+            for sentence in sentences:
+
+                sentence = sentence.strip()
+
+                if not sentence:
+                    continue
+
+                # 如果单句就已经超过 chunk_size
+                # 说明句子非常长，需要字符级兜底切分
+                if len(sentence) > chunk_size:
+
+                    # 如果当前 chunk 有内容，先保存
+                    if current_chunk:
+
+                        chunks.append(
+                            {
+                                "chunk_id": chunk_id,
+                                "text": current_chunk.strip(),
+                                "page": page,
+                                "source": source
+                            }
+                        )
+
+                        chunk_id += 1
+                        current_chunk = ""
+
+                    # =========================
+                    # 字符级切分（兜底方案）
+                    # =========================
+                    start = 0
+                    text_length = len(sentence)
+
+                    while start < text_length:
+
+                        end = start + chunk_size
+
+                        sub_text = sentence[start:end].strip()
+
+                        if sub_text:
+                            chunks.append(
+                                {
+                                    "chunk_id": chunk_id,
+                                    "text": sub_text,
+                                    "page": page,
+                                    "source": source
+                                }
+                            )
+
+                            chunk_id += 1
+
+                        start += chunk_size - chunk_overlap
+
+                    continue
+
+                # 如果当前 chunk 加上新句子不会超长
+                if len(current_chunk) + len(sentence) <= chunk_size:
+
+                    current_chunk += sentence
+
+                else:
+                    # 当前 chunk 已满，先保存
+                    if current_chunk:
+
+                        chunks.append(
+                            {
+                                "chunk_id": chunk_id,
+                                "text": current_chunk.strip(),
+                                "page": page,
+                                "source": source
+                            }
+                        )
+
+                        chunk_id += 1
+
+                    # overlap 处理：保留上一块末尾部分
+                    if chunk_overlap > 0 and current_chunk:
+                        tail = current_chunk[-chunk_overlap:]
+                        current_chunk = tail + sentence
+                    else:
+                        current_chunk = sentence
+
+            # 当前段落最后剩余的 chunk
+            if current_chunk.strip():
+
+                chunks.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "text": current_chunk.strip(),
+                        "page": page,
+                        "source": source
+                    }
+                )
+
+                chunk_id += 1
 
     # 返回所有 chunk
     return chunks
