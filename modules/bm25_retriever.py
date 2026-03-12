@@ -1,5 +1,6 @@
 from typing import List, Dict
 from rank_bm25 import BM25Okapi
+from config import BM25_TOP_K
 import jieba   # 新增：中文分词
 
 
@@ -34,7 +35,7 @@ class BM25Retriever:
         # 构建 BM25 索引
         self.bm25 = BM25Okapi(tokenized_corpus)
 
-    def search(self, query: str, top_k: int = 5) -> List[Dict]:
+    def search(self, query: str, top_k: int = BM25_TOP_K) -> List[Dict]:
         """
         根据 query 执行 BM25 检索。
 

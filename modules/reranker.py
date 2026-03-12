@@ -1,5 +1,5 @@
 from typing import List, Dict
-
+from config import RERANK_TOP_K
 from sentence_transformers import CrossEncoder
 
 
@@ -8,7 +8,7 @@ from sentence_transformers import CrossEncoder
 reranker_model = CrossEncoder("BAAI/bge-reranker-base")
 
 
-def rerank_chunks(query: str, retrieved_chunks: List[Dict], top_k: int = 3) -> List[Dict]:
+def rerank_chunks(query: str, retrieved_chunks: List[Dict], top_k: int = RERANK_TOP_K) -> List[Dict]:
     """
     使用 Cross-Encoder 对召回到的 chunk 进行重排序。
 

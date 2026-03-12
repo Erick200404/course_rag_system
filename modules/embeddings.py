@@ -1,4 +1,5 @@
 from typing import List, Dict
+from config import EMBEDDING_MODEL
 import os
 
 from openai import OpenAI
@@ -33,7 +34,7 @@ def embed_chunks(chunks: List[Dict]) -> List[Dict]:
 
         # 调用 embedding 接口
         response = client.embeddings.create(
-            model="text-embedding-3-small",  # 常见 embedding 模型
+            model=EMBEDDING_MODEL,  # 常见 embedding 模型
             input=text
         )
 
@@ -69,7 +70,7 @@ def get_query_embedding(query: str) -> List[float]:
 
     # 调用 embedding 接口，将问题转成向量
     response = client.embeddings.create(
-        model="text-embedding-3-small",
+        model=EMBEDDING_MODEL,
         input=query
     )
 

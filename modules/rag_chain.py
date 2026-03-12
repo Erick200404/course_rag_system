@@ -1,4 +1,6 @@
 from typing import List, Dict
+from config import VECTOR_TOP_K, BM25_TOP_K, FINAL_TOP_K
+from config import CHAT_MODEL
 import os
 
 from openai import OpenAI
@@ -48,9 +50,9 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
         question=query,
         index=index,
         metadata=metadata,
-        top_k_vector=5,
-        top_k_bm25=5,
-        final_top_k=10
+        top_k_vector=VECTOR_TOP_K,
+        top_k_bm25=BM25_TOP_K,
+        final_top_k=FINAL_TOP_K
     )
 
     # 第二步：对候选结果进行重排序，选出最终最相关的 top_k 个 chunk
@@ -81,7 +83,7 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
 
     # 调用聊天模型生成最终答案
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
             {"role": "user", "content": prompt}

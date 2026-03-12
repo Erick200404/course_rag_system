@@ -1,11 +1,12 @@
 from typing import List, Dict
+from config import CHUNK_SIZE, CHUNK_OVERLAP
 import re   # 新增：用于正则切分段落和句子
 
 
 def split_text(
         pages: List[Dict],
-        chunk_size: int = 500,
-        chunk_overlap: int = 100
+        chunk_size: int = CHUNK_SIZE,
+        chunk_overlap: int = CHUNK_OVERLAP
 ) -> List[Dict]:
     """
     将按页提取的 PDF 文本切分为多个 chunk。
