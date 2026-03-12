@@ -11,18 +11,18 @@
  PDF 解析、文本切分、向量检索、问答生成、引用溯源。
 
 ## 快速启动
-请在anconda prompt中输入
-E:
-cd E:\pycharm_workspace\course_rag_system
-conda activate course_rag
+请在anconda prompt中输入  
+E:  
+cd E:\pycharm_workspace\course_rag_system  
+conda activate course_rag  
 
 ## Roadmap
 
 - [x] PDF loader
 - [x] Text splitter
 - [x] Embedding module
-- [ ] Vector store (FAISS)
-- [ ] Retriever
+- [x] Vector store (FAISS)
+- [x] Retriever
 - [ ] RAG pipeline
 - [ ] Streamlit UI
 - [ ] Hybrid retrieval (BM25 + Vector)
@@ -35,3 +35,9 @@ conda activate course_rag
 
 ### embeddings.py
 目前是直接用的text-embedding-3-small，后续考虑使用本地部署的模型
+
+### vector_store.py
+把这些向量放进 FAISS 里，后面用户提问时就能查最相近的 chunk
+
+### retriever.py
+根据用户问题，在 FAISS 中检索最相近的 top-k 个 chunk
