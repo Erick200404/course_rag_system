@@ -23,7 +23,7 @@ conda activate course_rag
 - [x] Embedding module
 - [x] Vector store (FAISS)
 - [x] Retriever
-- [ ] RAG pipeline
+- [x] RAG pipeline
 - [ ] Streamlit UI
 - [ ] Hybrid retrieval (BM25 + Vector)
 - [ ] Reranker
@@ -41,3 +41,6 @@ conda activate course_rag
 
 ### retriever.py
 根据用户问题，在 FAISS 中检索最相近的 top-k 个 chunk
+
+### rag_chain.py
+把召回的 chunk 拼成上下文，发给聊天模型，让它回答。即实现RAG问答链路，结合检索结果调用大模型生成答案
