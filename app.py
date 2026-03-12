@@ -5,6 +5,7 @@ import streamlit as st
 
 from modules.pdf_loader import load_pdf
 from modules.text_splitter import split_text
+from modules.data_cleaner import filter_pages
 from modules.embeddings import embed_chunks
 from modules.vector_store import (
     build_faiss_index,
@@ -90,7 +91,7 @@ def build_rag_pipeline(pdf_path: str):
 
     逻辑：
     1. 如果本地已有索引，则直接加载
-    2. 否则重新读取 PDF、切分 chunk、生成 embedding、构建并保存索引
+    2. 否则重新读取 PDF、过滤噪声页、切分 chunk、生成 embedding、构建并保存索引
 
     参数:
         pdf_path: PDF 文件路径
@@ -111,16 +112,19 @@ def build_rag_pipeline(pdf_path: str):
     # 1. 读取 PDF 内容（按页）
     pages = load_pdf(pdf_path)
 
-    # 2. 将页面切分为多个 chunk
+    # 2. 过滤目录页、过短页等噪声页
+    pages = filter_pages(pages)
+
+    # 3. 将清洗后的页面切分为多个 chunk
     chunks = split_text(pages)
 
-    # 3. 为每个 chunk 调用 embedding 接口生成向量
+    # 4. 为每个 chunk 调用 embedding 接口生成向量
     embedded_chunks = embed_chunks(chunks)
 
-    # 4. 根据 embedding 构建 FAISS 索引，并抽取 metadata
+    # 5. 根据 embedding 构建 FAISS 索引，并抽取 metadata
     index, metadata = build_faiss_index(embedded_chunks)
 
-    # 5. 将索引和 metadata 保存到本地，供下次直接复用
+    # 6. 将索引和 metadata 保存到本地，供下次直接复用
     save_faiss_index(index, metadata, index_path, metadata_path)
 
     return index, metadata
@@ -163,7 +167,7 @@ if ask_button:
 
                 # 2. 构建或加载 RAG 所需索引
                 #    如果已经存在索引，则直接加载
-                #    否则自动完成 PDF 解析、切分、embedding、建索引、保存
+                #    否则自动完成 PDF 解析、清洗、切分、embedding、建索引、保存
                 index, metadata = build_rag_pipeline(pdf_path)
 
                 # 3. 调用 RAG 问答链生成答案
@@ -180,8 +184,13 @@ if ask_button:
                     with st.expander(
                         f"片段 {i} | 来源：{item['source']} | 第 {item['page']} 页"
                     ):
-                        # 当前分数是 L2 距离，值越小通常表示越接近
-                        st.write(f"**分数（L2 距离）**：{item['score']:.4f}")
+                        # 兼容不同检索阶段产生的分数显示
+                        if "rerank_score" in item:
+                            st.write(f"**Reranker 分数**：{item['rerank_score']:.4f}")
+                        elif "score" in item:
+                            st.write(f"**分数（L2 距离）**：{item['score']:.4f}")
+                        elif "bm25_score" in item:
+                            st.write(f"**BM25 分数**：{item['bm25_score']:.4f}")
 
                         # 显示召回到的 chunk 文本
                         st.write(item["text"])
