@@ -17,7 +17,7 @@ cd E:\pycharm_workspace\course_rag_system
 conda activate course_rag  
 
 ## Roadmap
-第一版功能
+v1.0
 - [x] PDF loader
 - [x] Text splitter
 - [x] Embedding module
@@ -26,6 +26,7 @@ conda activate course_rag
 - [x] RAG pipeline
 - [x] Streamlit UI
 -----------------------------
+v2.0
 - [ ] Hybrid retrieval (BM25 + Vector)
 - [ ] Reranker
 ### pdf_loader.py

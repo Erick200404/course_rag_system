@@ -1,7 +1,8 @@
 from typing import List, Dict, Tuple
 import numpy as np
 import faiss
-
+import os
+import pickle
 
 def build_faiss_index(embedded_chunks: List[Dict]) -> Tuple[faiss.Index, List[Dict]]:
     """
@@ -51,6 +52,76 @@ def build_faiss_index(embedded_chunks: List[Dict]) -> Tuple[faiss.Index, List[Di
 
     return index, metadata
 
+# 保存函数
+def save_faiss_index(
+    index: faiss.Index,
+    metadata: List[Dict],
+    index_path: str = "storage/faiss_index.bin",
+    metadata_path: str = "storage/metadata.pkl"
+) -> None:
+    """
+    保存 FAISS 索引和 metadata 到本地。
+    """
+    os.makedirs(os.path.dirname(index_path), exist_ok=True)
+
+    #faiss.write_index() 保存向量索引
+    faiss.write_index(index, index_path)
+
+    #pickle.dump() 保存 metadata
+    with open(metadata_path, "wb") as f:
+        pickle.dump(metadata, f)
+
+# 加载函数
+def load_faiss_index(
+    index_path: str = "storage/faiss_index.bin",
+    metadata_path: str = "storage/metadata.pkl"
+) -> Tuple[faiss.Index, List[Dict]]:
+    """
+    从本地加载 FAISS 索引和 metadata。
+    """
+    if not faiss_index_exists(index_path, metadata_path):
+        raise FileNotFoundError("FAISS 索引文件或 metadata 文件不存在")
+
+    index = faiss.read_index(index_path)
+
+    with open(metadata_path, "rb") as f:
+        metadata = pickle.load(f)
+
+    return index, metadata
+
+# 判断函数
+def faiss_index_exists(
+    index_path: str = "storage/faiss_index.bin",
+    metadata_path: str = "storage/metadata.pkl"
+) -> bool:
+    """
+    判断索引文件和 metadata 文件是否都存在。
+    """
+    return os.path.exists(index_path) and os.path.exists(metadata_path)
+
+# 检索函数
+def search_faiss_index(
+    index: faiss.Index,
+    metadata: List[Dict],
+    query_embedding: List[float],
+    top_k: int = 5
+) -> List[Dict]:
+    """
+    在 FAISS 索引中检索最相似的 top_k 个 chunk。
+    """
+    query_vector = np.array([query_embedding], dtype="float32")
+    distances, indices = index.search(query_vector, top_k)
+
+    results = []
+    for score, idx in zip(distances[0], indices[0]):
+        if idx == -1:
+            continue
+
+        item = metadata[idx].copy()
+        item["score"] = float(score)
+        results.append(item)
+
+    return results
 
 if __name__ == "__main__":
     from modules.pdf_loader import load_pdf
