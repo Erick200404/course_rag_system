@@ -50,6 +50,31 @@ def embed_chunks(chunks: List[Dict]) -> List[Dict]:
 
     return embedded_chunks
 
+def get_query_embedding(query: str) -> List[float]:
+    """
+    调用 embedding API，将用户问题转为向量。
+
+    参数:
+        query: 用户输入的问题
+
+    返回:
+        query 对应的 embedding 向量
+    """
+    # 去掉首尾空白，避免无效输入
+    query = query.strip()
+
+    # 如果问题为空，直接报错
+    if not query:
+        raise ValueError("query 不能为空")
+
+    # 调用 embedding 接口，将问题转成向量
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=query
+    )
+
+    # 返回 query 的向量
+    return response.data[0].embedding
 
 if __name__ == "__main__":
 
