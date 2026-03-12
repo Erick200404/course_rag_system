@@ -1,4 +1,6 @@
 from typing import List, Dict
+from pathlib import Path
+
 from config import VECTOR_TOP_K, BM25_TOP_K, FINAL_TOP_K
 from config import CHAT_MODEL
 import os
@@ -35,6 +37,38 @@ def build_context(retrieved_chunks: List[Dict]) -> str:
     return "\n\n".join(context_parts)
 
 
+def build_reference_text(retrieved_chunks: List[Dict]) -> str:
+    """
+    根据检索到的 chunks 生成参考来源信息。
+    按文件名分组，并展示对应页码。
+    """
+    # 用于按 source 分组保存页码
+    source_pages = {}
+
+    for chunk in retrieved_chunks:
+        source = chunk["source"]
+        page = chunk["page"]
+
+        if source not in source_pages:
+            source_pages[source] = set()
+
+        source_pages[source].add(page)
+
+    reference_lines = []
+
+    for source, pages in source_pages.items():
+        # 去掉 .pdf 后缀，让显示更简洁
+        source_name = Path(source).stem
+
+        # 页码排序后拼接
+        pages_sorted = sorted(pages)
+        page_text = "、".join([f"第{p}页" for p in pages_sorted])
+
+        reference_lines.append(f"{source_name}：{page_text}")
+
+    return "\n".join(reference_lines)
+
+
 def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
@@ -45,7 +79,7 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
     """
 
     # 第一步：先用 Hybrid Retrieval 召回更多候选片段
-    # 这里先召回 10 个候选结果，给后续 Reranker 提供重排空间
+    # 这里先召回候选结果，给后续 Reranker 提供重排空间
     candidate_chunks = hybrid_retrieve(
         question=query,
         index=index,
@@ -78,7 +112,7 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
 1. 只能根据提供的资料回答，不要随意补充资料中没有的信息。
 2. 如果资料不足以回答问题，请明确说“根据当前检索到的资料，无法完整回答该问题”。
 3. 回答要清晰、准确、简洁。
-4. 在回答最后给出参考页码，格式示例：参考页码：第2页、第3页。
+4. 在回答最后给出参考来源，按“文件名：第x页、第y页”的格式展示。
 """
 
     # 调用聊天模型生成最终答案
@@ -92,6 +126,13 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
     )
 
     answer = response.choices[0].message.content
+
+    # 生成参考来源文本
+    reference_text = build_reference_text(retrieved_chunks)
+
+    # 如果模型回答里没有主动给出参考来源，这里在末尾补上
+    if "参考来源" not in answer:
+        answer = answer.strip() + "\n\n参考来源：\n" + reference_text
 
     return {
         "query": query,
