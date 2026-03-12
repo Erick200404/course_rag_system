@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-
+from config import RERANK_TOP_K
 import streamlit as st
 
 from modules.pdf_loader import load_pdf
@@ -146,7 +146,7 @@ uploaded_file = st.file_uploader("请上传一个 PDF 文件", type=["pdf"])
 # 输入问题
 question = st.text_input(
     "请输入你的问题：",
-    placeholder="例如：BETL 的总体框架是什么？"
+    placeholder="例如：请大致告诉我这个课件讲了什么？"
 )
 
 # 提问按钮
@@ -181,8 +181,8 @@ if ask_button:
                 index, metadata = build_rag_pipeline(pdf_path)
 
                 # 3. 调用 RAG 问答链生成答案
-                #    top_k=3 表示取最相关的 3 个 chunk 作为上下文
-                result = generate_answer(question, index, metadata, top_k=3)
+                #    top_k=RERANK_TOP_K 表示取最相关的 RERANK_TOP_K 个 chunk 作为上下文
+                result = generate_answer(question, index, metadata, top_k=RERANK_TOP_K)
 
                 # 4. 显示最终答案
                 st.subheader("回答结果")
