@@ -17,14 +17,15 @@ cd E:\pycharm_workspace\course_rag_system
 conda activate course_rag  
 
 ## Roadmap
-
+第一版功能
 - [x] PDF loader
 - [x] Text splitter
 - [x] Embedding module
 - [x] Vector store (FAISS)
 - [x] Retriever
 - [x] RAG pipeline
-- [ ] Streamlit UI
+- [x] Streamlit UI
+-----------------------------
 - [ ] Hybrid retrieval (BM25 + Vector)
 - [ ] Reranker
 ### pdf_loader.py
@@ -44,3 +45,6 @@ conda activate course_rag
 
 ### rag_chain.py
 把召回的 chunk 拼成上下文，发给聊天模型，让它回答。即实现RAG问答链路，结合检索结果调用大模型生成答案
+
+### run.py
+使用Streamlit UI构建前端
