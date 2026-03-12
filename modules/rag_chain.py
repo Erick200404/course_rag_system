@@ -4,7 +4,7 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from modules.retriever import search_similar_chunks
+from modules.hybrid_retriever import hybrid_retrieve
 
 # 加载环境变量
 load_dotenv()
@@ -20,7 +20,6 @@ def build_context(retrieved_chunks: List[Dict]) -> str:
     """
     将检索到的 chunks 拼接成可供大模型阅读的上下文。
     """
-
     context_parts = []
 
     for i, chunk in enumerate(retrieved_chunks, start=1):
@@ -41,8 +40,17 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
     3. 调用大模型生成答案
     """
 
-    # 先召回最相关的 chunk
-    retrieved_chunks = search_similar_chunks(query, index, metadata, top_k=top_k)
+    # 使用 Hybrid Retrieval 混合检索：
+    # 一路走向量检索（FAISS），一路走 BM25 关键词检索
+    # 然后将两路结果合并去重
+    retrieved_chunks = hybrid_retrieve(
+        question=query,
+        index=index,
+        metadata=metadata,
+        top_k_vector=5,
+        top_k_bm25=5,
+        final_top_k=top_k
+    )
 
     # 将召回内容拼成 context
     context = build_context(retrieved_chunks)
@@ -63,7 +71,7 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
 4. 在回答最后给出参考页码，格式示例：参考页码：第2页、第3页。
 """
 
-    # 调用聊天模型
+    # 调用聊天模型生成最终答案
     response = client.chat.completions.create(
         model="deepseek-chat",
         messages=[
