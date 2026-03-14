@@ -15,6 +15,9 @@ data/
 # storage
 storage/
 
+# test
+test/
+
 # vector index
 *.faiss
 *.pkl

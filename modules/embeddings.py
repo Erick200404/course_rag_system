@@ -27,10 +27,14 @@ client = OpenAI(
 # 避免在使用 API 模式时额外占用启动时间和内存。
 hf_model = None
 if EMBEDDING_BACKEND == "hf":
+    import torch
     from sentence_transformers import SentenceTransformer
 
     # 加载 HuggingFace 本地 embedding 模型
-    hf_model = SentenceTransformer(HF_EMBEDDING_MODEL)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    hf_model = SentenceTransformer(HF_EMBEDDING_MODEL, device=device)
+
+    print(f"当前 embedding 设备: {device}")
 
 
 def get_text_embedding(text: str) -> List[float]:

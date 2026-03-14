@@ -10,7 +10,7 @@ RAG 系统统一配置文件
 # 可选：
 # "api"  -> 使用当前的 API embedding
 # "hf"   -> 使用 HuggingFace 本地 embedding
-EMBEDDING_BACKEND = "api"
+EMBEDDING_BACKEND = "hf"
 
 # HuggingFace embedding 模型名称
 # 这个模型体积小、速度快，非常适合 RAG
