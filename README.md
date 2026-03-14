@@ -6,7 +6,14 @@
 
 系统允许用户上传课程 PDF（课件、讲义、实验报告等），并通过自然语言提问，系统会自动检索相关内容并生成答案，同时给出 **引用来源（文件名 + 页码）**，帮助用户快速定位知识点。
 
-该项目主要用于探索 **大语言模型 + 信息检索技术** 在学习辅助场景中的应用。
+该项目主要用于探索 **大语言模型 + 信息检索技术** 在学习辅助场景中的应用。   
+系统整体采用：
+
+  ```
+  Streamlit + FastAPI + RAG Pipeline
+  ```
+
+  架构实现 **前端界面 + 后端服务 + AI检索生成** 的完整流程。
 ![系统示例图.png](doc/%E7%B3%BB%E7%BB%9F%E7%A4%BA%E4%BE%8B%E5%9B%BE.png)
 
 ------
@@ -40,28 +47,32 @@
 
 # 系统架构
 
-整体 RAG Pipeline 如下：
+整体系统架构如下：
 
 ```
-PDF
- ↓
-PDF Loader
- ↓
-Text Cleaner
- ↓
-Text Splitter
- ↓
-Embedding
- ↓
-Vector Store (FAISS)
- ↓
-Hybrid Retrieval
- ↓
-Reranker
- ↓
-LLM
- ↓
-Answer + Reference
+  User
+   ↓
+  Streamlit UI
+   ↓
+  FastAPI
+   ↓
+  RAG Pipeline
+   ↓
+  PDF Loader
+   ↓
+  Text Splitter
+   ↓
+  Embedding
+   ↓
+  Vector Store (FAISS)
+   ↓
+  Hybrid Retrieval
+   ↓
+  Reranker
+   ↓
+  LLM
+   ↓
+  Answer + Reference
 ```
 
 ------
@@ -72,11 +83,13 @@ Answer + Reference
 
 ```
 Python
+FastAPI
+Streamlit
 FAISS
 BM25
 BGE Reranker
+HuggingFace Embedding
 OpenAI Compatible API
-Streamlit
 PyMuPDF
 ```
 
@@ -86,8 +99,36 @@ PyMuPDF
 - Hybrid Retrieval（向量检索 + 关键词检索）
 - Reranking
 - 多文档知识库
+- API 服务化架构
 
 ------
+
+# 项目结构
+
+```
+course_rag_system
+│
+├─ api
+│   └─ main.py            # FastAPI 服务接口
+│
+├─ modules
+│   ├─ pdf_loader.py
+│   ├─ text_splitter.py
+│   ├─ embeddings.py
+│   ├─ vector_store.py
+│   ├─ bm25_retriever.py
+│   ├─ hybrid_retriever.py
+│   ├─ reranker.py
+│   └─ rag_chain.py
+│
+├─ data                   # PDF 文件
+├─ storage                # 向量索引缓存
+│
+├─ app.py                 # Streamlit 前端
+├─ config.py              # 系统配置
+├─ requirements.txt
+└─ README.md
+```
 
 # 快速启动
 
@@ -126,7 +167,12 @@ ZHI_BASE_URL=你的API接口地址
 cd E:\pycharm_workspace\course_rag_system
 ```
 
-启动 Streamlit：
+启动 FastAPI
+```
+uvicorn main:app --reload
+```
+
+打开**另一个终端**启动 Streamlit：
 
 ```
 streamlit run app.py
@@ -220,6 +266,36 @@ http://localhost:8501
 
 ------
 
+# v2.0.0 工程化升级
+
+新增系统工程化能力：
+
+-  [x] 引入 FastAPI 构建问答服务接口
+-  [x] 新增 `/chat` RAG 问答 API
+-  [x] 新增 `/health` 服务健康检查接口
+-  [x] Streamlit 前端通过 HTTP 调用 FastAPI
+-  [x] 支持 HuggingFace 本地 embedding 模型
+-  [x] 自动检测 CUDA 并使用 GPU 推理
+-  [x] 修复 embedding 模型切换导致的索引冲突问题
+
+系统架构从：
+
+```
+Streamlit + RAG
+```
+
+升级为：
+
+```
+Streamlit
+ ↓
+FastAPI
+ ↓
+RAG Pipeline
+```
+
+  提升系统工程化程度。
+
 # 模块说明
 
 ## pdf_loader.py
@@ -269,9 +345,12 @@ http://localhost:8501
 text-embedding-3-small
 ```
 
-未来计划：
+HuggingFace 本地模型：
 
-- 支持本地 embedding 模型
+```
+sentence-transformers/all-MiniLM-L6-v2
+```
+系统会根据配置自动选择 embedding backend，并支持 GPU 加速。
 
 ------
 
@@ -362,6 +441,8 @@ Answer
 - 显示回答
 - 显示引用来源
 - 显示召回片段
+
+前端通过 HTTP 调用 FastAPI `/chat` 接口完成问答。
 
 ------
 
