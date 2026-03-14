@@ -1,11 +1,6 @@
 """
 RAG 系统统一配置文件
 """
-
-# ================================
-# Embedding backend configuration
-# ================================
-
 # 选择 embedding backend
 # 可选：
 # "api"  -> 使用当前的 API embedding
@@ -15,6 +10,27 @@ EMBEDDING_BACKEND = "hf"
 # HuggingFace embedding 模型名称
 # 这个模型体积小、速度快，非常适合 RAG
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# embedding 模型
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+# =======================================================================
+
+# 选择 LLM backend
+# 可选：
+# "api"    -> 使用 OpenAI-compatible 在线接口
+# "ollama" -> 使用本地 Ollama
+LLM_BACKEND = "ollama"
+
+# 在线 API 模型名
+CHAT_MODEL = "deepseek-chat"
+
+# Ollama 本地配置
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+OLLAMA_MODEL = "deepseek-r1:7b"
+OLLAMA_TIMEOUT = 120
+
+
 
 # ==============================
 # 文本切分参数
@@ -57,13 +73,6 @@ RERANK_TOP_K = 5
 
 FINAL_TOP_K = 12
 
-
-# ==============================
-# 模型配置
-# ==============================
-
-# embedding 模型
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 # 对话模型
 CHAT_MODEL = "deepseek-chat"

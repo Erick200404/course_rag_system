@@ -3,7 +3,9 @@ from pathlib import Path
 
 from config import VECTOR_TOP_K, BM25_TOP_K, FINAL_TOP_K
 from config import CHAT_MODEL
+from config import LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT
 import os
+import requests
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -69,6 +71,76 @@ def build_reference_text(retrieved_chunks: List[Dict]) -> str:
     return "\n".join(reference_lines)
 
 
+def call_api_llm(prompt: str) -> str:
+    """
+    调用在线 OpenAI-compatible 聊天模型。
+    """
+    response = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content
+
+
+def call_ollama_llm(prompt: str) -> str:
+    """
+    调用本地 Ollama 聊天模型。
+    """
+    # 使用 /api/chat 接口，和聊天场景更贴近
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+
+    # 这里传入聊天消息列表，格式与聊天模型习惯一致
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
+            {"role": "user", "content": prompt}
+        ],
+        "stream": False,
+        "options": {
+            # 保持和原在线模型一致的温度参数
+            "temperature": 0.2
+        }
+    }
+
+    # 向本地 Ollama 发送请求
+    response = requests.post(
+        url,
+        json=payload,
+        timeout=OLLAMA_TIMEOUT
+    )
+
+    # 如果请求失败，这里会直接抛异常，便于定位问题
+    response.raise_for_status()
+
+    # 解析 Ollama 返回的 JSON 结果
+    data = response.json()
+
+    # /api/chat 的回答正文在 message.content 中
+    return data["message"]["content"]
+
+
+def call_llm(prompt: str) -> str:
+    """
+    根据配置选择不同的 LLM backend。
+    """
+    # 如果配置为 ollama，则调用本地模型
+    if LLM_BACKEND == "ollama":
+        return call_ollama_llm(prompt)
+
+    # 如果配置为 api，则调用在线模型
+    if LLM_BACKEND == "api":
+        return call_api_llm(prompt)
+
+    # 其他非法配置，直接报错
+    raise ValueError(f"不支持的 LLM_BACKEND: {LLM_BACKEND}")
+
+
 def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
@@ -116,16 +188,7 @@ def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> 
 """
 
     # 调用聊天模型生成最终答案
-    response = client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.2
-    )
-
-    answer = response.choices[0].message.content
+    answer = call_llm(prompt)
 
     # 生成参考来源文本
     reference_text = build_reference_text(retrieved_chunks)
