@@ -9,7 +9,12 @@ from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from config import RERANK_TOP_K
+from config import (
+    RERANK_TOP_K,
+    EMBEDDING_BACKEND,
+    EMBEDDING_MODEL,
+    HF_EMBEDDING_MODEL,
+)
 
 from modules.pdf_loader import load_pdf
 from modules.text_splitter import split_text
@@ -59,13 +64,18 @@ def health_check():
 
 def get_multi_pdf_storage_paths(pdf_paths: List[str]) -> tuple[str, str]:
     """
-    根据多个 PDF 文件路径生成联合索引存储路径。
+    根据多个 PDF 文件路径和当前 embedding 配置生成联合索引存储路径。
 
     逻辑：
     1. 取所有 PDF 文件名（不带后缀）
     2. 排序后拼接，避免上传顺序不同导致重复建库
-    3. 使用 md5 生成固定长度知识库 id
-    4. 用该 id 作为 storage 子目录名称
+    3. 将 embedding backend 和模型名一起纳入索引标识
+    4. 使用 md5 生成固定长度知识库 id
+    5. 用该 id 作为 storage 子目录名称
+
+    这样可以避免：
+    - 同一组 PDF 在不同 embedding backend 下复用同一个旧索引
+    - 切换 embedding 模型后仍错误加载旧索引
     """
     # 取所有文件名（不带后缀）
     pdf_names = [Path(path).stem for path in pdf_paths]
@@ -73,14 +83,23 @@ def get_multi_pdf_storage_paths(pdf_paths: List[str]) -> tuple[str, str]:
     # 排序，避免相同文件集合因顺序不同生成不同索引
     pdf_names = sorted(pdf_names)
 
-    # 拼接文件名
-    joined_name = "_".join(pdf_names)
+    # 拼接 PDF 文件集合标识
+    joined_pdf_names = "_".join(pdf_names)
+
+    # 根据当前 embedding backend 选择实际使用的模型名
+    if EMBEDDING_BACKEND == "hf":
+        current_embedding_model = HF_EMBEDDING_MODEL
+    else:
+        current_embedding_model = EMBEDDING_MODEL
+
+    # 将 PDF 文件集合、embedding backend、embedding model 一起纳入索引标识
+    raw_kb_key = f"{joined_pdf_names}__backend={EMBEDDING_BACKEND}__model={current_embedding_model}"
 
     # 过滤特殊字符，避免路径显示混乱
-    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", joined_name)
+    safe_kb_key = re.sub(r"[^a-zA-Z0-9_=\-.]", "_", raw_kb_key)
 
     # 使用 md5 生成稳定的知识库 id
-    kb_id = hashlib.md5(safe_name.encode("utf-8")).hexdigest()
+    kb_id = hashlib.md5(safe_kb_key.encode("utf-8")).hexdigest()
 
     # 存储目录
     storage_dir = os.path.join("storage", kb_id)
@@ -106,6 +125,9 @@ def build_rag_pipeline(pdf_paths: List[str]):
     """
     # 获取当前这组 PDF 对应的索引路径
     index_path, metadata_path = get_multi_pdf_storage_paths(pdf_paths)
+
+    # 打印当前索引路径，便于调试不同 embedding 配置下的缓存情况
+    print(f"当前索引路径: {index_path}")
 
     # 如果索引已存在，则直接加载
     if faiss_index_exists(index_path, metadata_path):
