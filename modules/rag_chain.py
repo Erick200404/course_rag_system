@@ -89,22 +89,26 @@ def call_api_llm(prompt: str) -> str:
 
 def call_ollama_llm(prompt: str) -> str:
     """
-    调用本地 Ollama 聊天模型。
+    调用本地 Ollama 文本生成接口。
     """
-    # 使用 /api/chat 接口，和聊天场景更贴近
-    url = f"{OLLAMA_BASE_URL}/api/chat"
+    # 对当前单轮 RAG 场景，使用 /api/generate 更简单、更稳定
+    url = f"{OLLAMA_BASE_URL}/api/generate"
 
-    # 这里传入聊天消息列表，格式与聊天模型习惯一致
+    # 将 system 指令和用户 prompt 合并成一个完整提示词
+    full_prompt = (
+        "你是一个课程资料问答助手，擅长根据给定资料回答问题。\n\n"
+        f"{prompt}"
+    )
+
     payload = {
         "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
-            {"role": "user", "content": prompt}
-        ],
+        "prompt": full_prompt,
         "stream": False,
         "options": {
             # 保持和原在线模型一致的温度参数
-            "temperature": 0.2
+            "temperature": 0.2,
+            # 显式限制上下文窗口，降低本地 7B 模型的压力
+            "num_ctx": 2048
         }
     }
 
@@ -115,15 +119,22 @@ def call_ollama_llm(prompt: str) -> str:
         timeout=OLLAMA_TIMEOUT
     )
 
-    # 如果请求失败，这里会直接抛异常，便于定位问题
-    response.raise_for_status()
+    # 如果请求失败，这里尽量打印 Ollama 返回的详细错误信息
+    if response.status_code != 200:
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+
+        raise RuntimeError(
+            f"Ollama 调用失败，status_code={response.status_code}，detail={error_detail}"
+        )
 
     # 解析 Ollama 返回的 JSON 结果
     data = response.json()
 
-    # /api/chat 的回答正文在 message.content 中
-    return data["message"]["content"]
-
+    # /api/generate 的回答正文在 response 字段中
+    return data["response"]
 
 def call_llm(prompt: str) -> str:
     """

@@ -169,7 +169,7 @@ cd E:\pycharm_workspace\course_rag_system
 
 启动 FastAPI
 ```
-uvicorn main:app --reload
+uvicorn api.main:app --reload
 ```
 
 打开**另一个终端**启动 Streamlit：
