@@ -1,3 +1,4 @@
+
 # 基于 RAG 的课程 PDF 智能问答与复习辅助系统
 
 ## 一、项目简介
@@ -6,14 +7,15 @@
 
 系统允许用户上传课程 PDF（课件、讲义、实验报告等），并通过自然语言提问，系统会自动检索相关内容并生成答案，同时给出 **引用来源（文件名 + 页码）**，帮助用户快速定位知识点。
 
-该项目主要用于探索 **大语言模型 + 信息检索技术** 在学习辅助场景中的应用。   
+该项目主要用于探索 **大语言模型 + 信息检索技术** 在学习辅助场景中的应用。  
 系统整体采用：
 
-  ```
-  Streamlit + FastAPI + RAG Pipeline
-  ```
+```
+Streamlit + FastAPI + RAG Pipeline
+```
 
-  架构实现 **前端界面 + 后端服务 + AI检索生成** 的完整流程。
+架构实现 **前端界面 + 后端服务 + AI检索生成** 的完整流程。
+
 ![系统示例图.png](doc/%E7%B3%BB%E7%BB%9F%E7%A4%BA%E4%BE%8B%E5%9B%BE.png)
 
 ------
@@ -50,29 +52,29 @@
 整体系统架构如下：
 
 ```
-  User
-   ↓
-  Streamlit UI
-   ↓
-  FastAPI
-   ↓
-  RAG Pipeline
-   ↓
-  PDF Loader
-   ↓
-  Text Splitter
-   ↓
-  Embedding
-   ↓
-  Vector Store (FAISS)
-   ↓
-  Hybrid Retrieval
-   ↓
-  Reranker
-   ↓
-  LLM
-   ↓
-  Answer + Reference
+User
+ ↓
+Streamlit UI
+ ↓
+FastAPI
+ ↓
+RAG Pipeline
+ ↓
+PDF Loader
+ ↓
+Text Splitter
+ ↓
+Embedding
+ ↓
+Vector Store (FAISS)
+ ↓
+Hybrid Retrieval
+ ↓
+Reranker
+ ↓
+LLM
+ ↓
+Answer + Reference
 ```
 
 ------
@@ -90,6 +92,7 @@ BM25
 BGE Reranker
 HuggingFace Embedding
 OpenAI Compatible API
+Ollama (Local LLM)
 PyMuPDF
 ```
 
@@ -130,6 +133,8 @@ course_rag_system
 └─ README.md
 ```
 
+------
+
 # 快速启动
 
 ## 1 环境准备
@@ -150,13 +155,47 @@ pip install -r requirements.txt
 ------
 
 ## 2 配置文件
-在项目根目录创建 `data`和`storage`目录：  
+
+在项目根目录创建 `data` 和 `storage` 目录。  
+
 在项目根目录创建 `.env` 文件并按照如下示例填写：
 
 ```
 ZHI_API_KEY=你的APIKEY
 ZHI_BASE_URL=你的API接口地址
 ```
+
+------
+
+## 2.1 本地模型（可选）
+
+系统支持使用 **Ollama 本地大模型** 进行推理。
+
+安装 Ollama：
+
+https://ollama.com
+
+下载模型：
+
+```
+ollama pull deepseek-r1:7b
+```
+
+启动 Ollama 服务：
+
+```
+ollama serve
+```
+
+然后在 `config.py` 中修改：
+
+```
+LLM_BACKEND = "ollama"
+OLLAMA_MODEL = "deepseek-r1:7b"
+```
+
+即可使用本地模型进行问答。
+
 ------
 
 ## 3 启动系统
@@ -168,11 +207,12 @@ cd E:\pycharm_workspace\course_rag_system
 ```
 
 启动 FastAPI
+
 ```
 uvicorn api.main:app --reload
 ```
 
-打开**另一个终端**启动 Streamlit：
+打开 **另一个终端** 启动 Streamlit：
 
 ```
 streamlit run app.py
@@ -198,13 +238,13 @@ http://localhost:8501
 
 实现最基础的 RAG pipeline：
 
--  [x] PDF Loader
--  [x] Text Splitter
--  [x] Embedding 模块
--  [x] Vector Store（FAISS）
--  [x] Retriever
--  [x] RAG Pipeline
--  [x] Streamlit UI
+- [x] PDF Loader
+- [x] Text Splitter
+- [x] Embedding 模块
+- [x] Vector Store（FAISS）
+- [x] Retriever
+- [x] RAG Pipeline
+- [x] Streamlit UI
 
 系统可以：
 
@@ -221,9 +261,9 @@ http://localhost:8501
 
 新增：
 
--  [x] Vector Store 数据持久化
--  [x] Hybrid Retrieval（BM25 + Vector）
--  [x] Reranker 重排序
+- [x] Vector Store 数据持久化
+- [x] Hybrid Retrieval（BM25 + Vector）
+- [x] Reranker 重排序
 
 改进：
 
@@ -236,10 +276,10 @@ http://localhost:8501
 
 对系统结构进行优化：
 
--  [x] 优化 Text Splitter
--  [x] 引入统一 `config` 管理参数
--  [x] BM25 中文分词优化
--  [x] 检索参数可配置化
+- [x] 优化 Text Splitter
+- [x] 引入统一 `config` 管理参数
+- [x] BM25 中文分词优化
+- [x] 检索参数可配置化
 
 ------
 
@@ -247,10 +287,10 @@ http://localhost:8501
 
 支持多 PDF 共同组成知识库：
 
--  [x] 多 PDF 上传
--  [x] 联合向量索引
--  [x] 跨文档检索
--  [x] 引用来源展示（文件名 + 页码）
+- [x] 多 PDF 上传
+- [x] 联合向量索引
+- [x] 跨文档检索
+- [x] 引用来源展示（文件名 + 页码）
 
 系统从：
 
@@ -270,13 +310,13 @@ http://localhost:8501
 
 新增系统工程化能力：
 
--  [x] 引入 FastAPI 构建问答服务接口
--  [x] 新增 `/chat` RAG 问答 API
--  [x] 新增 `/health` 服务健康检查接口
--  [x] Streamlit 前端通过 HTTP 调用 FastAPI
--  [x] 支持 HuggingFace 本地 embedding 模型
--  [x] 自动检测 CUDA 并使用 GPU 推理
--  [x] 修复 embedding 模型切换导致的索引冲突问题
+- [x] 引入 FastAPI 构建问答服务接口
+- [x] 新增 `/chat` RAG 问答 API
+- [x] 新增 `/health` 服务健康检查接口
+- [x] Streamlit 前端通过 HTTP 调用 FastAPI
+- [x] 支持 HuggingFace 本地 embedding 模型
+- [x] 自动检测 CUDA 并使用 GPU 推理
+- [x] 修复 embedding 模型切换导致的索引冲突问题
 
 系统架构从：
 
@@ -294,7 +334,31 @@ FastAPI
 RAG Pipeline
 ```
 
-  提升系统工程化程度。
+提升系统工程化程度。
+
+------
+
+# v2.1.0 本地模型支持
+
+新增本地 LLM 推理能力：
+
+- [x] 支持 Ollama 本地模型推理
+- [x] 新增 `LLM_BACKEND` 配置
+- [x] 支持 API 模型与本地模型自由切换
+- [x] 本地模型使用 `deepseek-r1:7b`
+- [x] 优化本地推理稳定性（使用 `/api/generate` 接口）
+
+系统 LLM 调用链升级为：
+
+```
+LLM Backend
+ ├─ API (deepseek-chat)
+ └─ Ollama (deepseek-r1)
+```
+
+实现 **在线模型与本地模型统一适配**。
+
+------
 
 # 模块说明
 
@@ -350,6 +414,7 @@ HuggingFace 本地模型：
 ```
 sentence-transformers/all-MiniLM-L6-v2
 ```
+
 系统会根据配置自动选择 embedding backend，并支持 GPU 加速。
 
 ------
@@ -422,6 +487,22 @@ LLM
 Answer
 ```
 
+LLM 调用支持多 backend：
+
+API 模型：
+
+```
+deepseek-chat
+POST /v1/chat/completions
+```
+
+本地模型：
+
+```
+deepseek-r1:7b
+POST /api/generate
+```
+
 同时生成：
 
 ```
@@ -450,12 +531,12 @@ Answer
 
 未来可以继续优化：
 
--  语义级文本切分
--  Query Rewrite
--  Answer Evaluation
--  本地 embedding 模型
--  向量数据库（Milvus / Qdrant）
--  支持更多文档格式（docx、ppt）
+- 语义级文本切分
+- Query Rewrite
+- Answer Evaluation
+- 更强的本地 LLM（Qwen / Llama / DeepSeek）
+- 向量数据库（Milvus / Qdrant）
+- 支持更多文档格式（docx、ppt）
 
 ------
 
@@ -469,6 +550,8 @@ Answer
 - 多文档知识库
 - 问答生成
 - 引用溯源
+
+并支持 **在线大模型 API 与本地大模型（Ollama）两种推理模式**。
 
 适用于：
 
