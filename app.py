@@ -1,23 +1,18 @@
 import os
-import re
-import hashlib
-from pathlib import Path
 from typing import List
 
-from config import RERANK_TOP_K
+import requests
 import streamlit as st
 
-from modules.pdf_loader import load_pdf
-from modules.text_splitter import split_text
-from modules.data_cleaner import filter_pages
-from modules.embeddings import embed_chunks
-from modules.vector_store import (
-    build_faiss_index,
-    save_faiss_index,
-    load_faiss_index,
-    faiss_index_exists,
-)
-from modules.rag_chain import generate_answer
+from config import RERANK_TOP_K
+
+
+# ==============================
+# FastAPI 服务地址配置
+# ==============================
+# 这里使用环境变量优先，方便以后部署时切换地址；
+# 如果没有配置环境变量，则默认请求本机的 FastAPI 服务。
+API_BASE_URL = os.getenv("RAG_API_BASE_URL", "http://127.0.0.1:8000")
 
 
 # 设置页面基础信息
@@ -28,7 +23,7 @@ st.set_page_config(
 )
 
 # -----------------------------
-# 自定义样式：让页面更像一个完整产品
+# 自定义样式：尽量保持你原来的页面风格
 # -----------------------------
 st.markdown(
     """
@@ -168,102 +163,66 @@ def save_uploaded_file(uploaded_file, save_dir: str = "data") -> str:
     return file_path
 
 
-def get_multi_pdf_storage_paths(pdf_paths: List[str]) -> tuple[str, str]:
+def call_health_api() -> bool:
     """
-    根据多个 PDF 文件路径生成联合索引存储路径。
-
-    逻辑：
-    1. 取所有 PDF 文件名（不带后缀）
-    2. 排序后拼接，避免上传顺序不同导致重复建库
-    3. 使用 md5 生成固定长度的知识库 id
-    4. 用该 id 作为 storage 子目录名称
-
-    参数:
-        pdf_paths: 多个 PDF 文件路径
+    调用 FastAPI 的健康检查接口，用于判断后端服务是否在线。
 
     返回:
-        index_path: FAISS 索引文件路径
-        metadata_path: metadata 文件路径
+        True  -> 后端服务正常
+        False -> 后端服务不可用
     """
-    # 取所有文件名（不带后缀）
-    pdf_names = [Path(path).stem for path in pdf_paths]
-
-    # 排序，避免同一组文件因顺序不同而得到不同索引目录
-    pdf_names = sorted(pdf_names)
-
-    # 先拼成一个字符串
-    joined_name = "_".join(pdf_names)
-
-    # 过滤中文和特殊字符，避免日志或路径显示混乱
-    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", joined_name)
-
-    # 如果拼接后太长，使用 md5 保证路径稳定且不会过长
-    kb_id = hashlib.md5(safe_name.encode("utf-8")).hexdigest()
-
-    # 联合索引目录
-    storage_dir = os.path.join("storage", kb_id)
-
-    # FAISS 索引文件路径
-    index_path = os.path.join(storage_dir, "faiss_index.bin")
-
-    # metadata 文件路径
-    metadata_path = os.path.join(storage_dir, "metadata.pkl")
-
-    return index_path, metadata_path
+    try:
+        response = requests.get(f"{API_BASE_URL}/health", timeout=5)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
 
 
-def build_rag_pipeline(pdf_paths: List[str]):
+def call_chat_api(question: str, pdf_names: List[str], top_k: int) -> dict:
     """
-    根据多个 PDF 构建或加载完整的 RAG 检索基础。
-
-    逻辑：
-    1. 如果本地已有联合索引，则直接加载
-    2. 否则逐个读取 PDF、过滤噪声页、切分 chunk
-    3. 合并所有 PDF 的 chunk
-    4. 统一生成 embedding、构建 FAISS 索引并保存
+    调用 FastAPI 的 /chat 接口，获取 RAG 问答结果。
 
     参数:
-        pdf_paths: 多个 PDF 文件路径
+        question: 用户问题
+        pdf_names: 参与问答的 PDF 文件名列表
+        top_k: 最终召回片段数量
 
     返回:
-        index: FAISS 索引
-        metadata: 与向量一一对应的元数据列表
+        FastAPI 返回的 JSON 结果
     """
-    # 先根据当前这批 PDF 获取联合索引保存路径
-    index_path, metadata_path = get_multi_pdf_storage_paths(pdf_paths)
+    # 组织请求体，和后端 ChatRequest 保持一致
+    payload = {
+        "question": question,
+        "pdf_names": pdf_names,
+        "top_k": top_k
+    }
 
-    # 如果索引文件和 metadata 文件都已经存在，则直接加载
-    if faiss_index_exists(index_path, metadata_path):
-        index, metadata = load_faiss_index(index_path, metadata_path)
-        return index, metadata
+    try:
+        # 发送 POST 请求到 FastAPI 后端
+        response = requests.post(
+            f"{API_BASE_URL}/chat",
+            json=payload,
+            timeout=120
+        )
 
-    # 如果本地没有索引，则从头开始构建
-    all_chunks = []
+        # 如果后端返回非 200，抛出异常并带上返回内容
+        response.raise_for_status()
 
-    # 逐个处理每个 PDF
-    for pdf_path in pdf_paths:
-        # 1. 读取 PDF 内容（按页）
-        pages = load_pdf(pdf_path)
+        # 解析并返回 JSON 结果
+        return response.json()
 
-        # 2. 过滤目录页、过短页等噪声页
-        pages = filter_pages(pages)
+    except requests.HTTPError as e:
+        # 优先展示后端返回的 detail，方便定位问题
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
 
-        # 3. 将清洗后的页面切分为多个 chunk
-        chunks = split_text(pages)
+        raise RuntimeError(f"后端接口调用失败：{error_detail}") from e
 
-        # 4. 把当前 PDF 的 chunk 合并到总列表
-        all_chunks.extend(chunks)
-
-    # 5. 为所有 chunk 统一生成 embedding
-    embedded_chunks = embed_chunks(all_chunks)
-
-    # 6. 根据 embedding 构建 FAISS 索引，并抽取 metadata
-    index, metadata = build_faiss_index(embedded_chunks)
-
-    # 7. 将联合索引和 metadata 保存到本地，供下次直接复用
-    save_faiss_index(index, metadata, index_path, metadata_path)
-
-    return index, metadata
+    except requests.RequestException as e:
+        # 处理连接失败、超时等请求层异常
+        raise RuntimeError(f"无法连接 FastAPI 服务：{e}") from e
 
 
 def render_score(item: dict):
@@ -288,7 +247,6 @@ def set_example_question(text: str):
 
 # -----------------------------
 # 侧边栏：系统配置区
-# 这里不改后端接口，只做前端层面的可视配置
 # -----------------------------
 with st.sidebar:
     st.header("⚙️ 参数配置")
@@ -299,8 +257,7 @@ with st.sidebar:
     # 是否显示会话历史
     show_history = st.checkbox("显示历史问答", value=True)
 
-    # 这里允许用户临时指定展示用的 top_k
-    # 注意：最终传给 generate_answer 的 top_k 仍然是这里的值
+    # 允许用户临时指定展示用的 top_k
     top_k = st.slider(
         "召回片段数量（Top-K）",
         min_value=1,
@@ -309,7 +266,14 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.caption("提示：这里的 Top-K 会覆盖 config.py 中的默认展示值。")
+    st.caption("提示：这里的 Top-K 会传给 FastAPI 后端接口。")
+
+    # 显示后端服务状态，方便调试
+    backend_ok = call_health_api()
+    if backend_ok:
+        st.success("FastAPI 后端服务正常")
+    else:
+        st.error("FastAPI 后端不可用，请先启动 api/main.py")
 
     # 提供一个清空历史按钮，方便用户开始新一轮演示
     if st.button("🗑️ 清空历史问答", use_container_width=True):
@@ -339,7 +303,7 @@ with left_col:
     if uploaded_files:
         st.success(f"已上传 {len(uploaded_files)} 个文件")
 
-        # 这里将已上传文件显示成更清晰的标签形式
+        # 将已上传文件显示成更清晰的标签形式
         for uploaded_file in uploaded_files:
             file_size_kb = len(uploaded_file.getvalue()) / 1024
             st.markdown(
@@ -347,15 +311,8 @@ with left_col:
                 unsafe_allow_html=True
             )
 
-        # 如果已经上传文件，则提前计算索引路径，并显示当前知识库状态
-        pdf_paths_preview = [os.path.join("data", uploaded_file.name) for uploaded_file in uploaded_files]
-        index_path_preview, metadata_path_preview = get_multi_pdf_storage_paths(pdf_paths_preview)
-
-        # 判断当前这组文件是否已有本地索引
-        if faiss_index_exists(index_path_preview, metadata_path_preview):
-            st.info("当前这组 PDF 已存在本地索引，可直接复用。")
-        else:
-            st.warning("当前这组 PDF 还没有本地索引，首次提问时会自动建库。")
+        # 提示当前系统改为通过 FastAPI 处理问答
+        st.info("提问时会将文件保存到本地 data 目录，并由 FastAPI 后端完成建库与问答。")
     else:
         st.info("请先上传至少一个 PDF 文件。")
 
@@ -383,7 +340,7 @@ with left_col:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 这里给出一些可视化统计，让左侧信息更完整
+    # 这里给出一些可视化统计
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("📊 当前状态")
 
@@ -431,27 +388,31 @@ with right_col:
         elif not question.strip():
             st.warning("请输入你的问题。")
 
+        # 如果后端服务不可用，则提示先启动 FastAPI
+        elif not backend_ok:
+            st.error("FastAPI 后端不可用，请先运行：uvicorn api.main:app --reload")
+
         else:
             try:
-                # 用 status 代替单一 spinner，让用户更清楚当前步骤
+                # 用 status 展示当前处理进度
                 with st.status("正在处理你的问题...", expanded=True) as status:
-                    # 第 1 步：先把上传的多个 PDF 保存到本地
-                    st.write("1/4 正在保存上传的 PDF 文件...")
+                    # 第 1 步：将上传的 PDF 保存到本地 data 目录
+                    st.write("1/3 正在保存上传的 PDF 文件...")
                     pdf_paths = [save_uploaded_file(uploaded_file) for uploaded_file in uploaded_files]
 
-                    # 第 2 步：构建或加载多 PDF 联合索引
-                    # 如果已经存在索引，则直接加载
-                    # 否则自动完成 PDF 解析、清洗、切分、embedding、建索引、保存
-                    st.write("2/4 正在构建或加载知识库索引...")
-                    index, metadata = build_rag_pipeline(pdf_paths)
+                    # 从路径中提取文件名，传给后端接口
+                    pdf_names = [os.path.basename(path) for path in pdf_paths]
 
-                    # 第 3 步：调用 RAG 问答链生成答案
-                    # top_k 表示取最相关的 top_k 个 chunk 作为上下文
-                    st.write("3/4 正在检索相关片段并生成回答...")
-                    result = generate_answer(question, index, metadata, top_k=top_k)
+                    # 第 2 步：调用 FastAPI 后端接口
+                    st.write("2/3 正在调用 FastAPI 问答接口...")
+                    result = call_chat_api(
+                        question=question.strip(),
+                        pdf_names=pdf_names,
+                        top_k=top_k
+                    )
 
-                    # 第 4 步：保存结果到会话状态，便于展示历史
-                    st.write("4/4 正在整理结果并更新界面...")
+                    # 第 3 步：保存结果到会话状态，便于展示历史
+                    st.write("3/3 正在更新界面...")
                     st.session_state.latest_result = result
 
                     st.session_state.chat_history.append(
@@ -474,7 +435,6 @@ with right_col:
     if st.session_state.latest_result is not None:
         result = st.session_state.latest_result
 
-        # 4. 显示最终答案
         st.subheader("✅ 回答结果")
         st.markdown(
             f"""
@@ -485,21 +445,17 @@ with right_col:
             unsafe_allow_html=True
         )
 
-        # 5. 显示召回到的片段，便于调试和观察检索效果
+        # 显示召回到的片段，便于调试和观察检索效果
         if show_chunks:
             st.subheader("📎 召回片段预览")
             for i, item in enumerate(result["retrieved_chunks"], start=1):
-                # 为了兼容字段缺失，这里给 source/page 设置默认值
                 source = item.get("source", "未知来源")
                 page = item.get("page", "未知页码")
 
                 with st.expander(
                     f"片段 {i} | 来源：{source} | 第 {page} 页"
                 ):
-                    # 显示分数信息
                     render_score(item)
-
-                    # 显示召回到的 chunk 文本
                     st.write(item.get("text", ""))
 
     # -----------------------------
