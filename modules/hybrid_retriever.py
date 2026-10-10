@@ -4,79 +4,85 @@ from modules.vector_store import search_faiss_index
 from modules.embeddings import get_query_embedding
 from modules.bm25_retriever import BM25Retriever
 
-# 新增：从 config 中读取参数
 from config import VECTOR_TOP_K, BM25_TOP_K, FINAL_TOP_K
 
 
-# ==============================
-# 全局 BM25 retriever（只初始化一次）
-# ==============================
-bm25_retriever = None
-
-
-def hybrid_retrieve(
-    question: str,
-    index,
-    metadata: List[Dict],
-    top_k_vector: int = VECTOR_TOP_K,
-    top_k_bm25: int = BM25_TOP_K,
-    final_top_k: int = FINAL_TOP_K,
-) -> List[Dict]:
+class HybridRetriever:
     """
-    混合检索：结合向量检索和 BM25 关键词检索。
+    混合检索器：向量检索 + BM25 关键词检索。
 
-    参数:
-        question: 用户问题
-        index: FAISS 索引
-        metadata: 与向量对应的元数据列表
-        top_k_vector: 向量检索召回数量
-        top_k_bm25: BM25 检索召回数量
-        final_top_k: 最终返回数量
+    修复说明：
+    旧版本使用模块级全局单例缓存 BM25Retriever，导致切换到另一组 PDF
+    构建的新知识库后，BM25 仍然基于旧 metadata 检索，返回错误结果。
 
-    返回:
-        合并去重后的检索结果列表
+    现在 BM25 索引的生命周期与本实例绑定：
+    - 构造时基于传入的 metadata 构建一次 BM25
+    - 每个知识库（kb_id）持有独立的 HybridRetriever 实例
+    - 销毁实例即释放对应 BM25 索引
     """
 
-    global bm25_retriever
+    def __init__(self, index, metadata: List[Dict]):
+        """
+        参数:
+            index: FAISS 索引
+            metadata: 与向量一一对应的元数据列表
+        """
+        self.index = index
+        self.metadata = metadata
 
-    # ==========================
-    # 初始化 BM25（只执行一次）
-    # ==========================
-    if bm25_retriever is None:
-        bm25_retriever = BM25Retriever(metadata)
+        # BM25 索引与 metadata 绑定，随实例创建、随实例销毁
+        self.bm25 = BM25Retriever(metadata)
 
-    # 1. 先做向量检索
-    query_embedding = get_query_embedding(question)
+    def retrieve(
+        self,
+        question: str,
+        top_k_vector: int = VECTOR_TOP_K,
+        top_k_bm25: int = BM25_TOP_K,
+        final_top_k: int = FINAL_TOP_K,
+    ) -> List[Dict]:
+        """
+        混合检索：结合向量检索和 BM25 关键词检索。
 
-    vector_results = search_faiss_index(
-        index=index,
-        metadata=metadata,
-        query_embedding=query_embedding,
-        top_k=top_k_vector
-    )
+        参数:
+            question: 用户问题
+            top_k_vector: 向量检索召回数量
+            top_k_bm25: BM25 检索召回数量
+            final_top_k: 最终返回数量
 
-    # 2. 再做 BM25 检索
-    bm25_results = bm25_retriever.search(
-        question,
-        top_k=top_k_bm25
-    )
+        返回:
+            合并去重后的检索结果列表
+        """
+        # 1. 向量检索
+        query_embedding = get_query_embedding(question)
 
-    # 3. 合并结果
-    # 用 (source, page, chunk_id) 作为唯一标识去重
-    merged = {}
+        vector_results = search_faiss_index(
+            index=self.index,
+            metadata=self.metadata,
+            query_embedding=query_embedding,
+            top_k=top_k_vector,
+        )
 
-    for item in vector_results:
-        key = (item["source"], item["page"], item["chunk_id"])
-        merged[key] = item
+        # 2. BM25 检索
+        bm25_results = self.bm25.search(
+            question,
+            top_k=top_k_bm25,
+        )
 
-    for item in bm25_results:
-        key = (item["source"], item["page"], item["chunk_id"])
-        if key not in merged:
+        # 3. 合并结果
+        # 用 (source, page, chunk_id) 作为唯一标识去重
+        merged = {}
+
+        for item in vector_results:
+            key = (item["source"], item["page"], item["chunk_id"])
             merged[key] = item
 
-    # 4. 转成列表
-    results = list(merged.values())
+        for item in bm25_results:
+            key = (item["source"], item["page"], item["chunk_id"])
+            if key not in merged:
+                merged[key] = item
 
-    # 5. 先简单截断
-    # 当前阶段先不做统一排序，后面 reranker 会专门负责重排
-    return results[:final_top_k]
+        # 4. 转成列表并截断
+        # 当前阶段先不做统一排序，由 reranker 负责重排
+        results = list(merged.values())
+
+        return results[:final_top_k]

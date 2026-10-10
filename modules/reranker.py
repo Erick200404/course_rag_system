@@ -1,11 +1,29 @@
 from typing import List, Dict
+
 from config import RERANK_TOP_K
-from sentence_transformers import CrossEncoder
+
+# 懒加载的 CrossEncoder 模型实例
+# 旧版本在模块导入时就加载模型（import 即下载、占内存），
+# 现在改为首次调用 rerank_chunks 时才加载。
+_reranker_model = None
 
 
-# 这里使用一个常见的中文/英文都比较常用的 reranker 模型
-# 第一次加载会稍慢，因为需要下载模型
-reranker_model = CrossEncoder("BAAI/bge-reranker-base")
+def _get_reranker_model():
+    """
+    懒加载 BGE reranker 模型，并自动检测 CUDA。
+    """
+    global _reranker_model
+
+    if _reranker_model is None:
+        import torch
+        from sentence_transformers import CrossEncoder
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _reranker_model = CrossEncoder("BAAI/bge-reranker-base", device=device)
+
+        print(f"当前 reranker 设备: {device}")
+
+    return _reranker_model
 
 
 def rerank_chunks(query: str, retrieved_chunks: List[Dict], top_k: int = RERANK_TOP_K) -> List[Dict]:
@@ -24,12 +42,14 @@ def rerank_chunks(query: str, retrieved_chunks: List[Dict], top_k: int = RERANK_
     if not retrieved_chunks:
         return []
 
+    model = _get_reranker_model()
+
     # 构造 query-document 对
     # CrossEncoder 会对每一对 (query, chunk_text) 直接打分
     pairs = [(query, chunk["text"]) for chunk in retrieved_chunks]
 
     # 计算每个 pair 的相关性得分
-    scores = reranker_model.predict(pairs)
+    scores = model.predict(pairs)
 
     # 将得分写回每个 chunk
     reranked_results = []

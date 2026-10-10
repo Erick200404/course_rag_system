@@ -451,10 +451,14 @@ with right_col:
             for i, item in enumerate(result["retrieved_chunks"], start=1):
                 source = item.get("source", "未知来源")
                 page = item.get("page", "未知页码")
+                heading = item.get("heading", "")
 
-                with st.expander(
-                    f"片段 {i} | 来源：{source} | 第 {page} 页"
-                ):
+                # 有章节路径时附加展示，方便定位知识点
+                label = f"片段 {i} | 来源：{source} | 第 {page} 页"
+                if heading:
+                    label += f" | {heading}"
+
+                with st.expander(label):
                     render_score(item)
                     st.write(item.get("text", ""))
 

@@ -13,8 +13,8 @@ load_dotenv()
 # ==============================
 # API embedding 客户端初始化
 # ==============================
-# 这里保留你原有的 OpenAI-compatible 接口方式，
-# 这样即使后面切换到 HuggingFace，也不会破坏原有逻辑。
+# 保留 OpenAI-compatible 接口方式，
+# 这样即使切换到 HuggingFace，也不会破坏原有逻辑。
 client = OpenAI(
     api_key=os.getenv("ZHI_API_KEY"),
     base_url=os.getenv("ZHI_BASE_URL"),
@@ -30,11 +30,25 @@ if EMBEDDING_BACKEND == "hf":
     import torch
     from sentence_transformers import SentenceTransformer
 
-    # 加载 HuggingFace 本地 embedding 模型
+    # 自动检测 CUDA 并使用 GPU 推理
     device = "cuda" if torch.cuda.is_available() else "cpu"
     hf_model = SentenceTransformer(HF_EMBEDDING_MODEL, device=device)
 
     print(f"当前 embedding 设备: {device}")
+
+# BGE 系列模型检索场景的查询指令前缀（官方推荐用法）
+BGE_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
+
+# HF 本地批量编码的批大小
+HF_BATCH_SIZE = 32
+
+
+def _is_bge_model() -> bool:
+    """
+    判断当前 HF embedding 模型是否为 BGE 系列
+    （BGE 查询侧需要追加指令前缀）。
+    """
+    return HF_EMBEDDING_MODEL.lower().startswith("baai/bge")
 
 
 def get_text_embedding(text: str) -> List[float]:
@@ -87,6 +101,30 @@ def embed_chunks(chunks: List[Dict]) -> List[Dict]:
     返回:
         带 embedding 向量的 chunk 列表
     """
+    # ==============================
+    # HuggingFace 后端：批量编码
+    # ==============================
+    # 相比逐条 encode，批量编码可以充分利用 GPU，速度提升明显
+    if EMBEDDING_BACKEND == "hf":
+        texts = [chunk["text"].strip() for chunk in chunks]
+
+        vectors = hf_model.encode(
+            texts,
+            batch_size=HF_BATCH_SIZE,
+            show_progress_bar=False,
+        )
+
+        embedded_chunks = []
+        for chunk, vector in zip(chunks, vectors):
+            new_chunk = chunk.copy()
+            new_chunk["embedding"] = vector.tolist()
+            embedded_chunks.append(new_chunk)
+
+        return embedded_chunks
+
+    # ==============================
+    # API 后端：逐条调用
+    # ==============================
     embedded_chunks = []
 
     for chunk in chunks:
@@ -112,15 +150,21 @@ def get_query_embedding(query: str) -> List[float]:
     """
     将用户问题转为 embedding 向量。
 
+    BGE 系列模型在检索场景下，查询侧需要追加指令前缀，
+    文档侧不需要，这里只对查询做处理。
+
     参数:
         query: 用户输入的问题
 
     返回:
         query 对应的 embedding 向量
     """
-    # 这里直接复用统一的文本 embedding 接口，
-    # 保证 query 和 chunk 的向量生成逻辑一致。
-    return get_text_embedding(query)
+    text = query.strip()
+
+    if EMBEDDING_BACKEND == "hf" and _is_bge_model() and text:
+        text = BGE_QUERY_INSTRUCTION + text
+
+    return get_text_embedding(text)
 
 
 if __name__ == "__main__":

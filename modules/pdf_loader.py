@@ -1,21 +1,13 @@
 from pathlib import Path
+
 import fitz
 
+from config import PDF_PARSE_BACKEND
 
-def load_pdf(pdf_path: str) -> list[dict]:
+
+def _validate_pdf(pdf_path: str) -> Path:
     """
-    使用PyMuPDF（fitz）库读取 PDF，按页提取文本。注意，仅实现了文本pdf的读取，无法读取图片pdf。
-
-    Args:
-        pdf_path: PDF 文件路径
-
-    Returns:
-        一个列表，每个元素都是一页的数据：
-        {
-            "page": 页码,
-            "text": 页面文本,
-            "source": 文件名
-        }
+    校验 PDF 路径合法性的公共入口。
     """
     pdf_file = Path(pdf_path)
 
@@ -25,6 +17,24 @@ def load_pdf(pdf_path: str) -> list[dict]:
     if pdf_file.suffix.lower() != ".pdf":
         raise ValueError(f"文件不是 PDF 格式: {pdf_path}")
 
+    return pdf_file
+
+
+def _load_pdf_text(pdf_file: Path) -> list[dict]:
+    """
+    后端一：使用 PyMuPDF（fitz）逐页提取纯文本。
+
+    注意：仅支持文本型 PDF，无法处理扫描版/图片型 PDF；
+    且不保留标题层级、表格等版面结构。
+
+    Returns:
+        一个列表，每个元素都是一页的数据：
+        {
+            "page": 页码,
+            "text": 页面文本,
+            "source": 文件名
+        }
+    """
     doc = fitz.open(pdf_file)
     pages = []
 
@@ -32,7 +42,7 @@ def load_pdf(pdf_path: str) -> list[dict]:
         for i, page in enumerate(doc):
             text = page.get_text("text").strip()
 
-            # 即使这一页文字很少，也先保留；后面可以再决定是否过滤空页
+            # 即使这一页文字很少，也先保留；由 data_cleaner 决定是否过滤
             pages.append(
                 {
                     "page": i + 1,
@@ -44,6 +54,81 @@ def load_pdf(pdf_path: str) -> list[dict]:
         doc.close()
 
     return pages
+
+
+def _load_pdf_markdown(pdf_file: Path) -> list[dict]:
+    """
+    后端二：使用 pymupdf4llm 将 PDF 转为 Markdown。
+
+    优势（相对纯文本提取）：
+    - 基于字体大小识别标题层级，输出 #/##/### 结构
+    - 表格转换为 Markdown 表格
+    - 按版面块推断阅读顺序（对双栏课件友好）
+
+    Returns:
+        与 _load_pdf_text 相同结构的数据，text 为该页的 Markdown 文本
+    """
+    try:
+        import pymupdf4llm
+    except ImportError as e:
+        raise ImportError(
+            "markdown 解析后端需要先安装 pymupdf4llm：pip install pymupdf4llm"
+        ) from e
+
+    # page_chunks=True 时按页返回，每页一个 dict：
+    # {"metadata": {"page": 从 0 开始的页码, ...}, "text": 该页 Markdown}
+    md_pages = pymupdf4llm.to_markdown(str(pdf_file), page_chunks=True)
+
+    pages = []
+    for idx, md_page in enumerate(md_pages):
+        text = (md_page.get("text") or "").strip()
+
+        # 页码兼容处理：
+        # - 新版 pymupdf4llm 返回 page_number（1 起始）
+        # - 旧版返回 page（0 起始，需 +1）
+        # - 都没有时回退到列表下标
+        meta = md_page.get("metadata") or {}
+        if meta.get("page_number") is not None:
+            page_no = int(meta["page_number"])
+        elif meta.get("page") is not None:
+            page_no = int(meta["page"]) + 1
+        else:
+            page_no = idx + 1
+
+        pages.append(
+            {
+                "page": page_no,
+                "text": text,
+                "source": pdf_file.name,
+            }
+        )
+
+    return pages
+
+
+def load_pdf(pdf_path: str, backend: str | None = None) -> list[dict]:
+    """
+    读取 PDF，按页返回文本数据。
+
+    参数:
+        pdf_path: PDF 文件路径
+        backend: 解析后端，"markdown" 或 "text"；
+                 不传时使用 config.PDF_PARSE_BACKEND
+
+    返回:
+        [{"page": 页码, "text": 文本, "source": 文件名}, ...]
+    """
+    pdf_file = _validate_pdf(pdf_path)
+
+    backend = backend or PDF_PARSE_BACKEND
+
+    if backend == "markdown":
+        return _load_pdf_markdown(pdf_file)
+
+    if backend == "text":
+        return _load_pdf_text(pdf_file)
+
+    raise ValueError(f"不支持的 PDF_PARSE_BACKEND: {backend}")
 
 
 if __name__ == "__main__":

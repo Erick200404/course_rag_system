@@ -1,6 +1,8 @@
 # python
 __pycache__/
 *.pyc
+.pytest_cache/
+.pytest_tmp/
 
 # environment
 .env
@@ -8,6 +10,10 @@ __pycache__/
 
 # ide
 .idea/
+.vscode/
+
+# local agent workspace
+.workbuddy/
 
 # data
 data/

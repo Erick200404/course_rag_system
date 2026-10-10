@@ -10,7 +10,6 @@ import requests
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from modules.hybrid_retriever import hybrid_retrieve
 from modules.reranker import rerank_chunks
 
 # 加载环境变量
@@ -26,12 +25,19 @@ client = OpenAI(
 def build_context(retrieved_chunks: List[Dict]) -> str:
     """
     将检索到的 chunks 拼接成可供大模型阅读的上下文。
+    markdown 后端产生的 chunk 带章节路径，一并展示，帮助模型定位。
     """
     context_parts = []
 
     for i, chunk in enumerate(retrieved_chunks, start=1):
+        location = f"来源: {chunk['source']}，第{chunk['page']}页"
+
+        # 如果有章节路径，附加展示
+        if chunk.get("heading"):
+            location += f"，章节: {chunk['heading']}"
+
         part = (
-            f"资料{i}（来源: {chunk['source']}，第{chunk['page']}页）:\n"
+            f"资料{i}（{location}）:\n"
             f"{chunk['text']}"
         )
         context_parts.append(part)
@@ -136,6 +142,7 @@ def call_ollama_llm(prompt: str) -> str:
     # /api/generate 的回答正文在 response 字段中
     return data["response"]
 
+
 def call_llm(prompt: str) -> str:
     """
     根据配置选择不同的 LLM backend。
@@ -152,24 +159,27 @@ def call_llm(prompt: str) -> str:
     raise ValueError(f"不支持的 LLM_BACKEND: {LLM_BACKEND}")
 
 
-def generate_answer(query: str, index, metadata: List[Dict], top_k: int = 3) -> Dict:
+def generate_answer(query: str, retriever, top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
-    1. 使用 Hybrid Retrieval 召回候选 chunks
+    1. 使用 HybridRetriever 召回候选 chunks
     2. 使用 Reranker 对候选 chunks 进行重排序
     3. 拼接上下文
     4. 调用大模型生成答案
+
+    参数:
+        query: 用户问题
+        retriever: HybridRetriever 实例（与当前知识库绑定）
+        top_k: 最终保留的片段数量
     """
 
     # 第一步：先用 Hybrid Retrieval 召回更多候选片段
     # 这里先召回候选结果，给后续 Reranker 提供重排空间
-    candidate_chunks = hybrid_retrieve(
+    candidate_chunks = retriever.retrieve(
         question=query,
-        index=index,
-        metadata=metadata,
         top_k_vector=VECTOR_TOP_K,
         top_k_bm25=BM25_TOP_K,
-        final_top_k=FINAL_TOP_K
+        final_top_k=FINAL_TOP_K,
     )
 
     # 第二步：对候选结果进行重排序，选出最终最相关的 top_k 个 chunk
@@ -220,6 +230,7 @@ if __name__ == "__main__":
     from modules.text_splitter import split_text
     from modules.embeddings import embed_chunks
     from modules.vector_store import build_faiss_index
+    from modules.hybrid_retriever import HybridRetriever
 
     # 1. 读取 PDF
     pages = load_pdf("data/test.pdf")
@@ -233,10 +244,13 @@ if __name__ == "__main__":
     # 4. 构建 FAISS 索引
     index, metadata = build_faiss_index(embedded_chunks)
 
-    # 5. 提问
+    # 5. 构建混合检索器（与当前知识库绑定）
+    retriever = HybridRetriever(index, metadata)
+
+    # 6. 提问
     query = "BETL 的总体框架是什么？"
 
-    result = generate_answer(query, index, metadata, top_k=3)
+    result = generate_answer(query, retriever, top_k=3)
 
     print(f"用户问题：{result['query']}\n")
     print("模型回答：")

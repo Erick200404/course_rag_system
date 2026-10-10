@@ -1,10 +1,7 @@
 # api/main.py
 
 import os
-import re
-import hashlib
-from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -16,10 +13,12 @@ from config import (
     HF_EMBEDDING_MODEL,
 )
 
+from modules.doc_registry import compute_kb_id, register_documents
 from modules.pdf_loader import load_pdf
 from modules.text_splitter import split_text
 from modules.data_cleaner import filter_pages
 from modules.embeddings import embed_chunks
+from modules.hybrid_retriever import HybridRetriever
 from modules.vector_store import (
     build_faiss_index,
     save_faiss_index,
@@ -35,6 +34,15 @@ app = FastAPI(
     description="课程 PDF 智能问答系统 API",
     version="1.0.0"
 )
+
+
+# ==============================
+# HybridRetriever 实例缓存
+# ==============================
+# kb_id -> HybridRetriever
+# 修复说明：旧版 BM25 使用模块级全局单例，切换知识库后不重建；
+# 现在每个知识库持有独立的 retriever 实例，BM25 随之正确切换。
+_retriever_cache: Dict[str, HybridRetriever] = {}
 
 
 # ==============================
@@ -62,52 +70,26 @@ def health_check():
     return {"status": "ok"}
 
 
-def get_multi_pdf_storage_paths(pdf_paths: List[str]) -> tuple[str, str]:
+def get_current_embedding_model() -> str:
     """
-    根据多个 PDF 文件路径和当前 embedding 配置生成联合索引存储路径。
-
-    逻辑：
-    1. 取所有 PDF 文件名（不带后缀）
-    2. 排序后拼接，避免上传顺序不同导致重复建库
-    3. 将 embedding backend 和模型名一起纳入索引标识
-    4. 使用 md5 生成固定长度知识库 id
-    5. 用该 id 作为 storage 子目录名称
-
-    这样可以避免：
-    - 同一组 PDF 在不同 embedding backend 下复用同一个旧索引
-    - 切换 embedding 模型后仍错误加载旧索引
+    根据当前 embedding backend 返回实际使用的模型名。
     """
-    # 取所有文件名（不带后缀）
-    pdf_names = [Path(path).stem for path in pdf_paths]
-
-    # 排序，避免相同文件集合因顺序不同生成不同索引
-    pdf_names = sorted(pdf_names)
-
-    # 拼接 PDF 文件集合标识
-    joined_pdf_names = "_".join(pdf_names)
-
-    # 根据当前 embedding backend 选择实际使用的模型名
     if EMBEDDING_BACKEND == "hf":
-        current_embedding_model = HF_EMBEDDING_MODEL
-    else:
-        current_embedding_model = EMBEDDING_MODEL
+        return HF_EMBEDDING_MODEL
+    return EMBEDDING_MODEL
 
-    # 将 PDF 文件集合、embedding backend、embedding model 一起纳入索引标识
-    raw_kb_key = f"{joined_pdf_names}__backend={EMBEDDING_BACKEND}__model={current_embedding_model}"
 
-    # 过滤特殊字符，避免路径显示混乱
-    safe_kb_key = re.sub(r"[^a-zA-Z0-9_=\-.]", "_", raw_kb_key)
+def get_kb_storage_paths(kb_id: str) -> tuple[str, str]:
+    """
+    根据知识库 id 生成索引存储路径。
 
-    # 使用 md5 生成稳定的知识库 id
-    kb_id = hashlib.md5(safe_kb_key.encode("utf-8")).hexdigest()
-
-    # 存储目录
+    kb_id 由 PDF 文件内容 sha256 + embedding 配置共同决定：
+    - 同一组文件（内容不变）+ 同一 embedding 模型 -> 复用本地索引
+    - 任何文件内容更新或切换 embedding 模型 -> 新 kb_id -> 自动重建
+    """
     storage_dir = os.path.join("storage", kb_id)
 
-    # 索引文件路径
     index_path = os.path.join(storage_dir, "faiss_index.bin")
-
-    # metadata 文件路径
     metadata_path = os.path.join(storage_dir, "metadata.pkl")
 
     return index_path, metadata_path
@@ -118,49 +100,69 @@ def build_rag_pipeline(pdf_paths: List[str]):
     根据多个 PDF 构建或加载完整的 RAG 检索基础。
 
     逻辑：
-    1. 如果本地已有联合索引，则直接加载
-    2. 否则逐个读取 PDF、过滤噪声页、切分 chunk
-    3. 合并所有 PDF 的 chunk
-    4. 统一生成 embedding、构建 FAISS 索引并保存
+    1. 将文件登记进 SQLite 注册表（记录 sha256/大小/时间）
+    2. 基于文件内容 hash + embedding 配置计算 kb_id
+    3. 如果本地已有该 kb_id 的联合索引，则直接加载
+    4. 否则逐个读取 PDF、过滤噪声页、切分 chunk
+    5. 合并所有 PDF 的 chunk，统一生成 embedding、构建 FAISS 索引并保存
+    6. 为该知识库构建（或复用）HybridRetriever 实例
+
+    返回:
+        (index, metadata, kb_id, retriever)
     """
-    # 获取当前这组 PDF 对应的索引路径
-    index_path, metadata_path = get_multi_pdf_storage_paths(pdf_paths)
+    # 1. 登记文档信息
+    register_documents(pdf_paths)
 
-    # 打印当前索引路径，便于调试不同 embedding 配置下的缓存情况
-    print(f"当前索引路径: {index_path}")
+    # 2. 计算内容感知的知识库 id
+    kb_id = compute_kb_id(
+        pdf_paths,
+        embedding_backend=EMBEDDING_BACKEND,
+        embedding_model=get_current_embedding_model(),
+    )
 
-    # 如果索引已存在，则直接加载
+    index_path, metadata_path = get_kb_storage_paths(kb_id)
+
+    # 打印当前知识库 id，便于调试
+    print(f"当前知识库 kb_id: {kb_id}")
+
+    # 3. 如果索引已存在，则直接加载
     if faiss_index_exists(index_path, metadata_path):
         index, metadata = load_faiss_index(index_path, metadata_path)
-        return index, metadata
 
-    # 如果索引不存在，则从头构建
-    all_chunks = []
+    # 4. 如果索引不存在，则从头构建
+    else:
+        all_chunks = []
 
-    # 逐个处理每个 PDF
-    for pdf_path in pdf_paths:
-        # 1. 读取 PDF 内容
-        pages = load_pdf(pdf_path)
+        # 逐个处理每个 PDF
+        for pdf_path in pdf_paths:
+            # 读取 PDF 内容（markdown / text 后端由配置决定）
+            pages = load_pdf(pdf_path)
 
-        # 2. 过滤噪声页
-        pages = filter_pages(pages)
+            # 过滤噪声页
+            pages = filter_pages(pages)
 
-        # 3. 切分 chunk
-        chunks = split_text(pages)
+            # 切分 chunk
+            chunks = split_text(pages)
 
-        # 4. 合并到总 chunk 列表
-        all_chunks.extend(chunks)
+            # 合并到总 chunk 列表
+            all_chunks.extend(chunks)
 
-    # 5. 为所有 chunk 统一生成 embedding
-    embedded_chunks = embed_chunks(all_chunks)
+        # 为所有 chunk 统一生成 embedding
+        embedded_chunks = embed_chunks(all_chunks)
 
-    # 6. 构建 FAISS 索引
-    index, metadata = build_faiss_index(embedded_chunks)
+        # 构建 FAISS 索引
+        index, metadata = build_faiss_index(embedded_chunks)
 
-    # 7. 保存索引和 metadata，方便下次复用
-    save_faiss_index(index, metadata, index_path, metadata_path)
+        # 保存索引和 metadata，方便下次复用
+        save_faiss_index(index, metadata, index_path, metadata_path)
 
-    return index, metadata
+    # 5. 构建或复用当前知识库的 HybridRetriever
+    retriever = _retriever_cache.get(kb_id)
+    if retriever is None:
+        retriever = HybridRetriever(index, metadata)
+        _retriever_cache[kb_id] = retriever
+
+    return index, metadata, kb_id, retriever
 
 
 # ==============================
@@ -197,13 +199,12 @@ def chat(request: ChatRequest):
         pdf_paths.append(pdf_path)
 
     # 构建或加载知识库索引
-    index, metadata = build_rag_pipeline(pdf_paths)
+    index, metadata, kb_id, retriever = build_rag_pipeline(pdf_paths)
 
-    # 调用你现有的 RAG 逻辑生成答案
+    # 调用 RAG 逻辑生成答案
     result = generate_answer(
         query=question,
-        index=index,
-        metadata=metadata,
+        retriever=retriever,
         top_k=request.top_k
     )
 

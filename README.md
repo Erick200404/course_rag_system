@@ -115,17 +115,22 @@ course_rag_system
 │   └─ main.py            # FastAPI 服务接口
 │
 ├─ modules
-│   ├─ pdf_loader.py
-│   ├─ text_splitter.py
-│   ├─ embeddings.py
+│   ├─ pdf_loader.py      # PDF 解析（markdown / text 双后端）
+│   ├─ data_cleaner.py    # 噪声页过滤
+│   ├─ text_splitter.py   # 标题层级感知切分 + 三级兜底
+│   ├─ doc_registry.py    # SQLite 文档注册表（内容 hash）
+│   ├─ embeddings.py      # 双后端 embedding
 │   ├─ vector_store.py
 │   ├─ bm25_retriever.py
 │   ├─ hybrid_retriever.py
 │   ├─ reranker.py
 │   └─ rag_chain.py
 │
+├─ tests                  # pytest 单元测试
+├─ conftest.py
+│
 ├─ data                   # PDF 文件
-├─ storage                # 向量索引缓存
+├─ storage                # 向量索引缓存 + registry.db
 │
 ├─ app.py                 # Streamlit 前端
 ├─ config.py              # 系统配置
@@ -203,7 +208,7 @@ OLLAMA_MODEL = "deepseek-r1:7b"
 进入项目目录：
 
 ```
-cd E:\pycharm_workspace\course_rag_system
+cd E:\vscode_workspace\course_rag_system
 ```
 
 启动 FastAPI
@@ -357,6 +362,26 @@ LLM Backend
 ```
 
 实现 **在线模型与本地模型统一适配**。
+
+------
+
+# v3.0.0 检索质量与工程化重构（开发中）
+
+聚焦底层修复与检索质量升级：
+
+- [x] 修复 BM25 全局单例 bug：重构为 `HybridRetriever` 类，BM25 生命周期与知识库实例绑定，切换知识库后正确重建
+- [x] 新增 SQLite 文档注册表（`modules/doc_registry.py`）：kb_id 改由 **文件内容 sha256 + embedding 配置** 共同决定，文件更新 / 换模型后自动重建索引，解决旧索引复用问题
+- [x] embedding 换为中文模型 `BAAI/bge-small-zh-v1.5`，支持批量编码与 BGE 查询指令前缀
+- [x] PDF 解析升级为 `pymupdf4llm`（Markdown 结构，保留标题层级 / 表格 / 阅读顺序），切分改为 **标题层级感知**，chunk 携带章节路径（标题增强）
+- [x] Reranker 懒加载 + CUDA 自动检测
+- [x] 新增 pytest 单元测试（`tests/`，35 个用例）
+
+规划中（v3.x）：
+
+- [ ] Chroma 向量库 + LangChain 基础设施（loaders / splitters / LCEL）
+- [ ] 扫描页 OCR 路由（按页文本密度检测，PaddleOCR / MinerU）
+- [ ] 图片提取 + VLM 描述入库（qwen2.5vl via Ollama）
+- [ ] LangGraph 编排（Query Rewrite / 多轮对话 / CRAG 自纠错检索）
 
 ------
 

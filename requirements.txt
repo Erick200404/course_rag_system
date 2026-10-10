@@ -1,5 +1,8 @@
 pymupdf
+pymupdf4llm
 streamlit
+fastapi
+uvicorn
 faiss-cpu
 langchain
 langchain-community
@@ -7,5 +10,9 @@ sentence-transformers
 python-dotenv
 openai
 rank-bm25
-sentence-transformers
 jieba
+requests
+pydantic
+
+# 开发 / 测试
+pytest
