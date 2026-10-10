@@ -15,11 +15,29 @@ from modules.reranker import rerank_chunks
 # 加载环境变量
 load_dotenv()
 
-# 初始化 OpenAI 兼容客户端
-client = OpenAI(
-    api_key=os.getenv("ZHI_API_KEY"),
-    base_url=os.getenv("ZHI_BASE_URL"),
-)
+# OpenAI 兼容客户端懒加载。
+# 旧版在 import 时直接创建客户端，未配置 .env 会导致整个服务无法启动，
+# 而使用 Ollama 后端时根本不需要它。改为首次调用 API 后端时再创建。
+_api_client: OpenAI | None = None
+
+
+def _get_api_client() -> OpenAI:
+    """
+    懒加载 OpenAI-compatible 客户端（仅 api backend 使用）。
+    """
+    global _api_client
+
+    if _api_client is None:
+        api_key = os.getenv("ZHI_API_KEY")
+        if not api_key:
+            raise RuntimeError("未配置 ZHI_API_KEY，无法使用 API LLM 后端")
+
+        _api_client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("ZHI_BASE_URL"),
+        )
+
+    return _api_client
 
 
 def build_context(retrieved_chunks: List[Dict]) -> str:
@@ -81,7 +99,7 @@ def call_api_llm(prompt: str) -> str:
     """
     调用在线 OpenAI-compatible 聊天模型。
     """
-    response = client.chat.completions.create(
+    response = _get_api_client().chat.completions.create(
         model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},

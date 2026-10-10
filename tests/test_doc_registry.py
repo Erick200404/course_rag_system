@@ -5,6 +5,7 @@ doc_registry 单元测试：内容 hash 知识库 id 与文档登记。
 from modules.doc_registry import (
     compute_kb_id,
     file_sha256,
+    get_document,
     list_documents,
     register_documents,
     remove_document,
@@ -102,3 +103,13 @@ class TestRegistry:
         remove_document("a.pdf", db_path=db)
 
         assert list_documents(db_path=db) == []
+
+    def test_get_document_returns_current_record(self, tmp_path):
+        db = str(tmp_path / "registry.db")
+        pdf = _make_pdf(tmp_path / "a.pdf", b"content")
+
+        register_documents([str(pdf)], db_path=db)
+        record = get_document("a.pdf", db_path=db)
+
+        assert record is not None
+        assert record["sha256"] == file_sha256(str(pdf))

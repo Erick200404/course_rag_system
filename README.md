@@ -119,8 +119,9 @@ course_rag_system
 │   ├─ data_cleaner.py    # 噪声页过滤
 │   ├─ text_splitter.py   # 标题层级感知切分 + 三级兜底
 │   ├─ doc_registry.py    # SQLite 文档注册表（内容 hash）
-│   ├─ embeddings.py      # 双后端 embedding
-│   ├─ vector_store.py
+│   ├─ embeddings.py      # 双后端 embedding（懒加载）
+│   ├─ chroma_store.py    # Chroma 持久化向量库（增量更新）
+│   ├─ vector_store.py    # FAISS 索引（兜底后端）
 │   ├─ bm25_retriever.py
 │   ├─ hybrid_retriever.py
 │   ├─ reranker.py
@@ -391,9 +392,30 @@ LLM Backend
 - [x] 上传与 API 入参增加文件名路径校验，拒绝路径穿越
 - [x] 单元测试扩展至 44 个用例
 
+# v3.2.0 Chroma 向量数据库化
+
+把向量存储从「FAISS + pickle 整库重建」升级为可持久化、可增量维护的 Chroma 集合：
+
+- [x] 新增 `modules/chroma_store.py`：持久化集合（cosine 空间），chunk 的向量 / 文本 / metadata 统一存储，支持按 `doc_hash` 与 `source` 过滤
+- [x] `api/main.py` 双后端路由：`VECTOR_STORE_BACKEND` 可切换 `chroma` / `faiss`（FAISS 保留为兜底）
+- [x] 增量建库：按 `(source, sha256)` 判断文件是否变化，未变化的文件跳过解析与 embedding；内容变化时清除旧版本向量再写入新版本
+- [x] 检索选择集隔离：查询与 BM25 都限定在当前请求选中的文件（ChromaVectorView + metadata 过滤）
+- [x] 集合名按「embedding 模型 + 索引结构版本 + 解析后端 + 切分参数」生成指纹，避免不同配置复用同一集合
+- [x] 稳定性修复：`upsert_document` 改为按 source 整体替换（旧版本向量不再残留）；单文件解析不出 chunk 时跳过而非抛错；`rag_chain` 的 OpenAI 客户端改为懒加载，未配置 `.env` 也能启动 Ollama 后端
+- [x] 单元测试扩展至 54 个用例（新增 Chroma store 单元测试与 `_build_chroma_pipeline` 集成测试）
+
+配置示例：
+
+```python
+# config.py
+VECTOR_STORE_BACKEND = "chroma"   # "chroma" | "faiss"
+CHROMA_PATH = os.path.join("storage", "chroma")
+INDEX_SCHEMA_VERSION = "faiss-cosine-v2"
+```
+
 规划中（v3.x）：
 
-- [ ] Chroma 向量库 + LangChain 基础设施（loaders / splitters / LCEL）
+- [ ] LangChain 基础设施（loaders / splitters / LCEL）
 - [ ] 扫描页 OCR 路由（按页文本密度检测，PaddleOCR / MinerU）
 - [ ] 图片提取 + VLM 描述入库（qwen2.5vl via Ollama）
 - [ ] LangGraph 编排（Query Rewrite / 多轮对话 / CRAG 自纠错检索）
@@ -460,6 +482,24 @@ HF 后端：BAAI/bge-small-zh-v1.5
 - 向量存储
 - cosine similarity 检索
 - 持久化章节路径等完整 chunk metadata
+
+------
+
+## chroma_store.py
+
+负责（默认后端）：
+
+- 持久化 Chroma 集合，向量 / 文本 / metadata 统一存储（cosine 空间）
+- 按 `(source, doc_hash)` 写入与删除，支持单文档整体替换
+- `get_documents` / `query` 支持按 `doc_hash` 过滤，实现「当前选择的文件」隔离
+
+与 vector_store.py 的区别：
+
+| | Chroma（默认） | FAISS（兜底） |
+| --- | --- | --- |
+| 更新粒度 | 单文件增量 | 整个知识库重建 |
+| metadata | 存在集合内 | 与向量分开存 pickle |
+| 过滤检索 | 原生支持 | 需自行实现 |
 
 ------
 

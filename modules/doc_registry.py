@@ -72,14 +72,19 @@ def file_sha256(path: str, block_size: int = 1024 * 1024) -> str:
 
 def register_documents(
     pdf_paths: List[str],
-    db_path: str = REGISTRY_PATH,
+    db_path: str | None = None,
 ) -> List[DocumentRecord]:
     """
     将一组 PDF 文件登记进注册表（存在则更新）。
 
+    db_path 为 None 时使用模块级 REGISTRY_PATH（运行时解析，便于测试覆盖）。
+
     返回:
         每个文件的登记信息列表
     """
+    if db_path is None:
+        db_path = REGISTRY_PATH
+
     now = time.time()
     records: List[DocumentRecord] = []
 
@@ -116,10 +121,13 @@ def register_documents(
     return records
 
 
-def list_documents(db_path: str = REGISTRY_PATH) -> List[DocumentRecord]:
+def list_documents(db_path: str | None = None) -> List[DocumentRecord]:
     """
     列出注册表中的全部文档。
     """
+    if db_path is None:
+        db_path = REGISTRY_PATH
+
     columns = ("filename", "path", "sha256", "size", "mtime", "registered_at")
 
     with _db(db_path) as conn:
@@ -130,10 +138,35 @@ def list_documents(db_path: str = REGISTRY_PATH) -> List[DocumentRecord]:
     return [dict(zip(columns, row)) for row in rows]
 
 
-def remove_document(filename: str, db_path: str = REGISTRY_PATH) -> None:
+def get_document(filename: str, db_path: str | None = None) -> DocumentRecord | None:
+    """
+    Return the currently registered record for a filename, or None.
+    """
+    if db_path is None:
+        db_path = REGISTRY_PATH
+
+    columns = ("filename", "path", "sha256", "size", "mtime", "registered_at")
+
+    with _db(db_path) as conn:
+        row = conn.execute(
+            "SELECT filename, path, sha256, size, mtime, registered_at "
+            "FROM documents WHERE filename = ?",
+            (filename,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return dict(zip(columns, row))
+
+
+def remove_document(filename: str, db_path: str | None = None) -> None:
     """
     从注册表中删除指定文档。
     """
+    if db_path is None:
+        db_path = REGISTRY_PATH
+
     with _db(db_path) as conn:
         conn.execute("DELETE FROM documents WHERE filename = ?", (filename,))
 

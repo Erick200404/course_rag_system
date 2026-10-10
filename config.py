@@ -2,6 +2,8 @@
 RAG 系统统一配置文件
 """
 
+import os
+
 # ==============================
 # PDF 解析与切分
 # ==============================
@@ -14,6 +16,14 @@ PDF_PARSE_BACKEND = "markdown"
 # 索引结构版本。检索算法或 metadata 结构变化时更新该值，
 # 避免旧 FAISS 索引被新代码误加载。
 INDEX_SCHEMA_VERSION = "faiss-cosine-v2"
+
+# 向量存储后端：
+# "chroma" -> Chroma 持久化向量库，支持按文档增量更新和 metadata 过滤
+# "faiss"  -> 原有 FAISS + metadata.pkl 方案，保留为兜底
+VECTOR_STORE_BACKEND = "chroma"
+
+# Chroma 持久化目录
+CHROMA_PATH = os.path.join("storage", "chroma")
 
 # 每个 chunk 的最大字符数
 CHUNK_SIZE = 700

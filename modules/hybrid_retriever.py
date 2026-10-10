@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import Any, Dict, List
 
 from modules.vector_store import search_faiss_index
 from modules.embeddings import get_query_embedding
@@ -21,10 +21,10 @@ class HybridRetriever:
     - 销毁实例即释放对应 BM25 索引
     """
 
-    def __init__(self, index, metadata: List[Dict]):
+    def __init__(self, index: Any, metadata: List[Dict[str, Any]]):
         """
         参数:
-            index: FAISS 索引
+            index: FAISS 索引或 ChromaVectorView
             metadata: 与向量一一对应的元数据列表
         """
         self.index = index
@@ -55,12 +55,18 @@ class HybridRetriever:
         # 1. 向量检索
         query_embedding = get_query_embedding(question)
 
-        vector_results = search_faiss_index(
-            index=self.index,
-            metadata=self.metadata,
-            query_embedding=query_embedding,
-            top_k=top_k_vector,
-        )
+        if getattr(self.index, "is_chroma_view", False):
+            vector_results = self.index.search(
+                query_embedding,
+                top_k=top_k_vector,
+            )
+        else:
+            vector_results = search_faiss_index(
+                index=self.index,
+                metadata=self.metadata,
+                query_embedding=query_embedding,
+                top_k=top_k_vector,
+            )
 
         # 2. BM25 检索
         bm25_results = self.bm25.search(

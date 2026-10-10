@@ -10,6 +10,7 @@ from openai import OpenAI
 from config import EMBEDDING_MODEL, EMBEDDING_BACKEND, HF_EMBEDDING_MODEL
 
 if TYPE_CHECKING:
+    from openai import OpenAI
     from sentence_transformers import SentenceTransformer
 
 # 读取 .env 文件
@@ -20,10 +21,7 @@ load_dotenv()
 # ==============================
 # 保留 OpenAI-compatible 接口方式，
 # 这样即使切换到 HuggingFace，也不会破坏原有逻辑。
-client = OpenAI(
-    api_key=os.getenv("ZHI_API_KEY"),
-    base_url=os.getenv("ZHI_BASE_URL"),
-)
+_api_client: OpenAI | None = None
 
 # ==============================
 # HuggingFace embedding 模型初始化
@@ -31,15 +29,6 @@ client = OpenAI(
 # 只有在配置为 hf 时，才加载本地模型，
 # 避免在使用 API 模式时额外占用启动时间和内存。
 hf_model: SentenceTransformer | None = None
-if EMBEDDING_BACKEND == "hf":
-    import torch
-    from sentence_transformers import SentenceTransformer
-
-    # 自动检测 CUDA 并使用 GPU 推理
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    hf_model = SentenceTransformer(HF_EMBEDDING_MODEL, device=device)
-
-    print(f"当前 embedding 设备: {device}")
 
 # BGE 系列模型检索场景的查询指令前缀（官方推荐用法）
 BGE_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
@@ -58,12 +47,38 @@ def _is_bge_model() -> bool:
 
 def _get_hf_model() -> SentenceTransformer:
     """
-    Return the initialized HF model, with an explicit backend-state error.
+    Lazily load the configured HF model on first embedding.
     """
+    global hf_model
+
     if hf_model is None:
-        raise RuntimeError("HuggingFace embedding 模型未初始化")
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        hf_model = SentenceTransformer(HF_EMBEDDING_MODEL, device=device)
+        print(f"当前 embedding 设备: {device}")
 
     return hf_model
+
+
+def _get_api_client() -> OpenAI:
+    """
+    Lazily create the OpenAI-compatible client used by the API backend.
+    """
+    global _api_client
+
+    if _api_client is None:
+        api_key = os.getenv("ZHI_API_KEY")
+        if not api_key:
+            raise RuntimeError("未配置 ZHI_API_KEY，无法使用 API embedding 后端")
+
+        _api_client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("ZHI_BASE_URL"),
+        )
+
+    return _api_client
 
 
 def get_text_embedding(text: str) -> List[float]:
@@ -95,7 +110,7 @@ def get_text_embedding(text: str) -> List[float]:
     # 使用远程 API embedding
     # ==============================
     elif EMBEDDING_BACKEND == "api":
-        response = client.embeddings.create(
+        response = _get_api_client().embeddings.create(
             model=EMBEDDING_MODEL,
             input=text
         )

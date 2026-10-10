@@ -27,3 +27,6 @@ test/
 # vector index
 *.faiss
 *.pkl
+
+# pytest 临时目录（沙箱内 --basetemp）
+.tmp_pt*/

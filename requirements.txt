@@ -4,6 +4,7 @@ streamlit
 fastapi
 uvicorn
 faiss-cpu
+chromadb
 langchain
 langchain-community
 sentence-transformers
