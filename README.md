@@ -365,7 +365,7 @@ LLM Backend
 
 ------
 
-# v3.0.0 检索质量与工程化重构（开发中）
+# v3.0.0 检索质量与工程化重构
 
 聚焦底层修复与检索质量升级：
 
@@ -375,6 +375,21 @@ LLM Backend
 - [x] PDF 解析升级为 `pymupdf4llm`（Markdown 结构，保留标题层级 / 表格 / 阅读顺序），切分改为 **标题层级感知**，chunk 携带章节路径（标题增强）
 - [x] Reranker 懒加载 + CUDA 自动检测
 - [x] 新增 pytest 单元测试（`tests/`，35 个用例）
+
+------
+
+# v3.1.0 索引正确性修复
+
+聚焦多文档索引与溯源 metadata 的正确性：
+
+- [x] 修复同名 PDF 上传后不覆盖旧文件的问题：改用临时文件 + 原子替换，确保内容 hash 基于最新文件计算
+- [x] 修复 FAISS metadata 丢失章节路径的问题：持久化 embedding 之外的完整 chunk 字段
+- [x] 标题层级跨页延续：章节标题不再因分页被重置，后续页面 chunk 继续携带章节路径
+- [x] 向量检索从 L2 距离升级为 cosine similarity：文档与查询向量统一归一化，FAISS 使用 `IndexFlatIP`
+- [x] 多 PDF 建库时生成全局唯一 `chunk_id`，并按文件名稳定排序保证索引确定性
+- [x] 引入索引结构版本号：检索算法、解析后端或切分参数变化时自动生成新的 `kb_id`，避免误加载旧索引
+- [x] 上传与 API 入参增加文件名路径校验，拒绝路径穿越
+- [x] 单元测试扩展至 44 个用例
 
 规划中（v3.x）：
 
@@ -407,17 +422,10 @@ LLM Backend
 负责：
 
 - 将 PDF 页面切分为多个 chunk
-- 使用 chunk_size + overlap
-
-当前问题：
-
-- 按字符切分
-- 可能会打断语义
-
-后续可优化：
-
-- 语义分割
-- 标题增强
+- Markdown 后端按标题层级切分，并跨页维护章节路径
+- chunk 携带章节路径，并对 embedding 文本做标题增强
+- 长区段依次回退到段落、句子、字符三级切分，并保留 overlap
+- 支持多文档合并时的全局 `chunk_id`
 
 ------
 
@@ -431,13 +439,8 @@ LLM Backend
 当前使用：
 
 ```
-text-embedding-3-small
-```
-
-HuggingFace 本地模型：
-
-```
-sentence-transformers/all-MiniLM-L6-v2
+API 后端：text-embedding-3-small
+HF 后端：BAAI/bge-small-zh-v1.5
 ```
 
 系统会根据配置自动选择 embedding backend，并支持 GPU 加速。
@@ -448,14 +451,15 @@ sentence-transformers/all-MiniLM-L6-v2
 
 负责：
 
-- 构建 FAISS 向量索引
+- 构建归一化 FAISS 向量索引
 - 保存 metadata
 - 支持索引持久化
 
 功能：
 
 - 向量存储
-- 相似度搜索
+- cosine similarity 检索
+- 持久化章节路径等完整 chunk metadata
 
 ------
 

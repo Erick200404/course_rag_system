@@ -1,6 +1,7 @@
 # api/main.py
 
 import os
+from pathlib import Path
 from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException
@@ -11,6 +12,10 @@ from config import (
     EMBEDDING_BACKEND,
     EMBEDDING_MODEL,
     HF_EMBEDDING_MODEL,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    INDEX_SCHEMA_VERSION,
+    PDF_PARSE_BACKEND,
 )
 
 from modules.doc_registry import compute_kb_id, register_documents
@@ -118,6 +123,10 @@ def build_rag_pipeline(pdf_paths: List[str]):
         pdf_paths,
         embedding_backend=EMBEDDING_BACKEND,
         embedding_model=get_current_embedding_model(),
+        index_schema_version=(
+            f"{INDEX_SCHEMA_VERSION}:{PDF_PARSE_BACKEND}:"
+            f"{CHUNK_SIZE}:{CHUNK_OVERLAP}"
+        ),
     )
 
     index_path, metadata_path = get_kb_storage_paths(kb_id)
@@ -133,8 +142,10 @@ def build_rag_pipeline(pdf_paths: List[str]):
     else:
         all_chunks = []
 
-        # 逐个处理每个 PDF
-        for pdf_path in pdf_paths:
+        # 按文件名排序，保证同一组 PDF 生成确定性的全局 chunk_id
+        next_chunk_id = 0
+
+        for pdf_path in sorted(pdf_paths, key=lambda p: os.path.basename(p).lower()):
             # 读取 PDF 内容（markdown / text 后端由配置决定）
             pages = load_pdf(pdf_path)
 
@@ -142,10 +153,17 @@ def build_rag_pipeline(pdf_paths: List[str]):
             pages = filter_pages(pages)
 
             # 切分 chunk
-            chunks = split_text(pages)
+            chunks = split_text(
+                pages,
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+                backend=PDF_PARSE_BACKEND,
+                start_chunk_id=next_chunk_id,
+            )
 
             # 合并到总 chunk 列表
             all_chunks.extend(chunks)
+            next_chunk_id += len(chunks)
 
         # 为所有 chunk 统一生成 embedding
         embedded_chunks = embed_chunks(all_chunks)
@@ -187,6 +205,12 @@ def chat(request: ChatRequest):
     # 将文件名转为 data 目录下的路径
     pdf_paths = []
     for pdf_name in request.pdf_names:
+        if Path(pdf_name).name != pdf_name:
+            raise HTTPException(
+                status_code=400,
+                detail="pdf_names 中只能包含文件名，不能包含路径"
+            )
+
         pdf_path = os.path.join("data", pdf_name)
 
         # 检查文件是否存在

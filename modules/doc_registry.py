@@ -14,10 +14,14 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import Any, Dict, List
+
+from config import INDEX_SCHEMA_VERSION
 
 # 注册表默认存放位置
 REGISTRY_PATH = os.path.join("storage", "registry.db")
+
+DocumentRecord = Dict[str, Any]
 
 _CREATE_DOCUMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -66,7 +70,10 @@ def file_sha256(path: str, block_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def register_documents(pdf_paths: List[str], db_path: str = REGISTRY_PATH) -> List[Dict]:
+def register_documents(
+    pdf_paths: List[str],
+    db_path: str = REGISTRY_PATH,
+) -> List[DocumentRecord]:
     """
     将一组 PDF 文件登记进注册表（存在则更新）。
 
@@ -74,7 +81,7 @@ def register_documents(pdf_paths: List[str], db_path: str = REGISTRY_PATH) -> Li
         每个文件的登记信息列表
     """
     now = time.time()
-    records = []
+    records: List[DocumentRecord] = []
 
     with _db(db_path) as conn:
         for path in pdf_paths:
@@ -109,7 +116,7 @@ def register_documents(pdf_paths: List[str], db_path: str = REGISTRY_PATH) -> Li
     return records
 
 
-def list_documents(db_path: str = REGISTRY_PATH) -> List[Dict]:
+def list_documents(db_path: str = REGISTRY_PATH) -> List[DocumentRecord]:
     """
     列出注册表中的全部文档。
     """
@@ -135,6 +142,7 @@ def compute_kb_id(
     pdf_paths: List[str],
     embedding_backend: str,
     embedding_model: str,
+    index_schema_version: str = INDEX_SCHEMA_VERSION,
 ) -> str:
     """
     根据多个 PDF 的内容 hash 和 embedding 配置生成知识库 id。
@@ -159,5 +167,6 @@ def compute_kb_id(
     # 知识库标识 = 文件集合内容 + embedding 配置
     raw_kb_key = "||".join(parts)
     raw_kb_key += f"||backend={embedding_backend}||model={embedding_model}"
+    raw_kb_key += f"||index_schema={index_schema_version}"
 
     return hashlib.md5(raw_kb_key.encode("utf-8")).hexdigest()

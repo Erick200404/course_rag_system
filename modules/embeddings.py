@@ -1,4 +1,6 @@
-from typing import List, Dict
+from __future__ import annotations
+
+from typing import Any, Dict, List, TYPE_CHECKING
 import os
 
 from dotenv import load_dotenv
@@ -6,6 +8,9 @@ from openai import OpenAI
 
 # 从配置文件中读取 embedding 相关配置
 from config import EMBEDDING_MODEL, EMBEDDING_BACKEND, HF_EMBEDDING_MODEL
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 # 读取 .env 文件
 load_dotenv()
@@ -25,7 +30,7 @@ client = OpenAI(
 # ==============================
 # 只有在配置为 hf 时，才加载本地模型，
 # 避免在使用 API 模式时额外占用启动时间和内存。
-hf_model = None
+hf_model: SentenceTransformer | None = None
 if EMBEDDING_BACKEND == "hf":
     import torch
     from sentence_transformers import SentenceTransformer
@@ -51,6 +56,16 @@ def _is_bge_model() -> bool:
     return HF_EMBEDDING_MODEL.lower().startswith("baai/bge")
 
 
+def _get_hf_model() -> SentenceTransformer:
+    """
+    Return the initialized HF model, with an explicit backend-state error.
+    """
+    if hf_model is None:
+        raise RuntimeError("HuggingFace embedding 模型未初始化")
+
+    return hf_model
+
+
 def get_text_embedding(text: str) -> List[float]:
     """
     统一的单条文本 embedding 接口。
@@ -73,7 +88,7 @@ def get_text_embedding(text: str) -> List[float]:
     # ==============================
     if EMBEDDING_BACKEND == "hf":
         # encode 返回 numpy 数组，这里转成 list 方便后续序列化和存储
-        embedding = hf_model.encode(text)
+        embedding = _get_hf_model().encode(text, normalize_embeddings=True)
         return embedding.tolist()
 
     # ==============================
@@ -91,7 +106,7 @@ def get_text_embedding(text: str) -> List[float]:
         raise ValueError(f"不支持的 EMBEDDING_BACKEND: {EMBEDDING_BACKEND}")
 
 
-def embed_chunks(chunks: List[Dict]) -> List[Dict]:
+def embed_chunks(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     将 chunk 文本转为向量，并写回 chunk。
 
@@ -106,12 +121,13 @@ def embed_chunks(chunks: List[Dict]) -> List[Dict]:
     # ==============================
     # 相比逐条 encode，批量编码可以充分利用 GPU，速度提升明显
     if EMBEDDING_BACKEND == "hf":
-        texts = [chunk["text"].strip() for chunk in chunks]
+        texts = [str(chunk["text"]).strip() for chunk in chunks]
 
-        vectors = hf_model.encode(
+        vectors = _get_hf_model().encode(
             texts,
             batch_size=HF_BATCH_SIZE,
             show_progress_bar=False,
+            normalize_embeddings=True,
         )
 
         embedded_chunks = []

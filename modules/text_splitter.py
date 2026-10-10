@@ -96,12 +96,17 @@ def _split_long_text(text: str, chunk_size: int, chunk_overlap: int) -> List[str
     return texts
 
 
-def _split_char_pages(pages: List[Dict], chunk_size: int, chunk_overlap: int) -> List[Dict]:
+def _split_char_pages(
+        pages: List[Dict],
+        chunk_size: int,
+        chunk_overlap: int,
+        start_chunk_id: int,
+) -> List[Dict]:
     """
     text 后端：整页走三级兜底切分（原有行为）。
     """
     chunks = []
-    chunk_id = 0
+    chunk_id = start_chunk_id
 
     for page_data in pages:
         text = page_data["text"]
@@ -118,7 +123,10 @@ def _split_char_pages(pages: List[Dict], chunk_size: int, chunk_overlap: int) ->
     return chunks
 
 
-def _extract_sections(markdown_text: str) -> List[tuple]:
+def _extract_sections(
+        markdown_text: str,
+        heading_stack: List[tuple] | None = None,
+) -> List[tuple]:
     """
     将一页 Markdown 文本按标题层级切出区段。
 
@@ -129,7 +137,8 @@ def _extract_sections(markdown_text: str) -> List[tuple]:
     sections = []
 
     # 标题栈，例如 [(1, "第一章"), (2, "1.1 背景")]
-    stack = []
+    # 传入 heading_stack 时可以跨页延续章节路径
+    stack = heading_stack if heading_stack is not None else []
     buf = []
 
     def flush():
@@ -163,7 +172,12 @@ def _extract_sections(markdown_text: str) -> List[tuple]:
     return sections
 
 
-def _split_markdown_pages(pages: List[Dict], chunk_size: int, chunk_overlap: int) -> List[Dict]:
+def _split_markdown_pages(
+        pages: List[Dict],
+        chunk_size: int,
+        chunk_overlap: int,
+        start_chunk_id: int,
+) -> List[Dict]:
     """
     markdown 后端：标题层级感知切分。
 
@@ -174,7 +188,8 @@ def _split_markdown_pages(pages: List[Dict], chunk_size: int, chunk_overlap: int
     4. chunk 文本前面拼上章节路径（标题增强，有利于 embedding 检索）
     """
     chunks = []
-    chunk_id = 0
+    chunk_id = start_chunk_id
+    heading_stack: List[tuple] = []
 
     for page_data in pages:
         text = page_data["text"]
@@ -184,7 +199,7 @@ def _split_markdown_pages(pages: List[Dict], chunk_size: int, chunk_overlap: int
         if not text.strip():
             continue
 
-        for heading, body in _extract_sections(text):
+        for heading, body in _extract_sections(text, heading_stack):
             if not body:
                 continue
 
@@ -211,6 +226,7 @@ def split_text(
         chunk_size: int = CHUNK_SIZE,
         chunk_overlap: int = CHUNK_OVERLAP,
         backend: str | None = None,
+        start_chunk_id: int = 0,
 ) -> List[Dict]:
     """
     将按页提取的 PDF 文本切分为多个 chunk。
@@ -229,6 +245,7 @@ def split_text(
 
         backend: 切分后端，"markdown"（标题感知）或 "text"（三级兜底）；
                  不传时使用 config.PDF_PARSE_BACKEND
+        start_chunk_id: chunk_id 起始值；多文档合并建库时用于保证全局唯一
 
     返回:
         chunks 列表，例如:
@@ -246,13 +263,16 @@ def split_text(
     if chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap 必须小于 chunk_size")
 
+    if start_chunk_id < 0:
+        raise ValueError("start_chunk_id 不能小于 0")
+
     backend = backend or PDF_PARSE_BACKEND
 
     if backend == "markdown":
-        return _split_markdown_pages(pages, chunk_size, chunk_overlap)
+        return _split_markdown_pages(pages, chunk_size, chunk_overlap, start_chunk_id)
 
     if backend == "text":
-        return _split_char_pages(pages, chunk_size, chunk_overlap)
+        return _split_char_pages(pages, chunk_size, chunk_overlap, start_chunk_id)
 
     raise ValueError(f"不支持的切分 backend: {backend}")
 

@@ -11,6 +11,10 @@ RAG 系统统一配置文件
 # "text"     -> 纯文本逐页提取（旧行为，兜底方案）
 PDF_PARSE_BACKEND = "markdown"
 
+# 索引结构版本。检索算法或 metadata 结构变化时更新该值，
+# 避免旧 FAISS 索引被新代码误加载。
+INDEX_SCHEMA_VERSION = "faiss-cosine-v2"
+
 # 每个 chunk 的最大字符数
 CHUNK_SIZE = 700
 

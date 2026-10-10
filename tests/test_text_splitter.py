@@ -48,6 +48,19 @@ class TestMarkdownBackend:
         assert chunks[0]["text"].startswith("第一章 概述")
         assert "这是概述内容" in chunks[0]["text"]
 
+    def test_heading_continues_across_pages(self):
+        pages = [
+            _page("# 第一章 概述\n\n本章介绍系统的整体设计。", page=1),
+            _page("这一页没有新标题，但仍然属于上一页的章节。", page=2),
+        ]
+
+        chunks = split_text(pages, backend="markdown")
+
+        assert len(chunks) == 2
+        assert chunks[0]["page"] == 1
+        assert chunks[1]["page"] == 2
+        assert chunks[1]["heading"] == "第一章 概述"
+
     def test_long_section_falls_back_and_keeps_heading(self):
         # 构造一个超过 chunk_size 的区段
         body = "。".join([f"这是第{i}句用于测试长文本切分行为" for i in range(200)])
@@ -91,11 +104,33 @@ class TestTextBackend:
         assert [c["chunk_id"] for c in chunks] == [0, 1]
         assert [c["page"] for c in chunks] == [1, 2]
 
+    def test_start_chunk_id_supports_global_ids(self):
+        chunks = split_text(
+            [_page("第一段内容。"), _page("第二段内容。", page=2)],
+            backend="text",
+            start_chunk_id=10,
+        )
+
+        assert [c["chunk_id"] for c in chunks] == [10, 11]
+
+    def test_markdown_start_chunk_id_supports_global_ids(self):
+        chunks = split_text(
+            [_page("# 第一章\n\n正文内容。")],
+            backend="markdown",
+            start_chunk_id=7,
+        )
+
+        assert chunks[0]["chunk_id"] == 7
+
 
 class TestValidation:
     def test_overlap_must_be_smaller_than_size(self):
         with pytest.raises(ValueError):
             split_text([_page("x")], chunk_size=100, chunk_overlap=100)
+
+    def test_start_chunk_id_cannot_be_negative(self):
+        with pytest.raises(ValueError):
+            split_text([_page("x")], start_chunk_id=-1)
 
     def test_unknown_backend_raises(self):
         with pytest.raises(ValueError):

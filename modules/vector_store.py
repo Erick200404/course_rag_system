@@ -20,35 +20,31 @@ def build_faiss_index(embedded_chunks: List[Dict]) -> Tuple[faiss.Index, List[Di
     if not embedded_chunks:
         raise ValueError("embedded_chunks 不能为空")
 
-    # 取出所有 embedding，拼成二维 numpy 数组
-    # FAISS 要求数据类型通常为 float32
+    # BGE 检索语义使用 cosine；向量归一化后内积等价于 cosine。
     embeddings = np.array(
         [chunk["embedding"] for chunk in embedded_chunks],
         dtype="float32"
     )
 
+    if embeddings.ndim != 2 or embeddings.shape[1] == 0:
+        raise ValueError("embedding 维度不合法")
+
+    faiss.normalize_L2(embeddings)
+
     # 获取向量维度，比如 1536
     dimension = embeddings.shape[1]
 
-    # 创建最基础的 FAISS 索引
-    # IndexFlatL2 表示用 L2 距离（欧式距离）做相似度搜索
-    index = faiss.IndexFlatL2(dimension)
+    index = faiss.IndexFlatIP(dimension)
 
     # 将所有向量加入索引
     index.add(embeddings)
 
-    # 单独保存 metadata
-    # 因为 FAISS 只存向量，不存原始文本和页码信息
+    # 保留 embedding 之外的完整字段，避免 heading 等溯源信息入库丢失。
     metadata = []
     for chunk in embedded_chunks:
-        metadata.append(
-            {
-                "chunk_id": chunk["chunk_id"],
-                "text": chunk["text"],
-                "page": chunk["page"],
-                "source": chunk["source"],
-            }
-        )
+        item = chunk.copy()
+        item.pop("embedding", None)
+        metadata.append(item)
 
     return index, metadata
 
@@ -110,6 +106,7 @@ def search_faiss_index(
     在 FAISS 索引中检索最相似的 top_k 个 chunk。
     """
     query_vector = np.array([query_embedding], dtype="float32")
+    faiss.normalize_L2(query_vector)
     distances, indices = index.search(query_vector, top_k)
 
     results = []

@@ -46,6 +46,14 @@ class TestComputeKbId:
 
         assert id_1 != id_2
 
+    def test_index_schema_change_changes_kb_id(self, tmp_path):
+        pdf = _make_pdf(tmp_path / "a.pdf", b"same content")
+
+        id_1 = compute_kb_id([str(pdf)], "hf", "m", index_schema_version="v1")
+        id_2 = compute_kb_id([str(pdf)], "hf", "m", index_schema_version="v2")
+
+        assert id_1 != id_2
+
     def test_different_file_sets_differ(self, tmp_path):
         a = _make_pdf(tmp_path / "a.pdf", b"content-a")
         b = _make_pdf(tmp_path / "b.pdf", b"content-b")

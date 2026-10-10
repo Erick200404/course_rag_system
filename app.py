@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import List
 
 import requests
@@ -151,14 +152,23 @@ def save_uploaded_file(uploaded_file, save_dir: str = "data") -> str:
     # 如果目录不存在，则自动创建
     os.makedirs(save_dir, exist_ok=True)
 
+    # Streamlit 正常只返回文件名；显式拒绝路径，避免客户端构造路径穿越。
+    if Path(uploaded_file.name).name != uploaded_file.name:
+        raise ValueError("上传文件名不能包含路径")
+
     # 拼接最终保存路径，例如 data/test.pdf
     file_path = os.path.join(save_dir, uploaded_file.name)
 
-    # 如果文件不存在，再写入，避免重复保存导致权限问题
-    if not os.path.exists(file_path):
-        # 以二进制形式写入文件内容
-        with open(file_path, "wb") as f:
+    # 原子替换保证同名文件内容更新后一定覆盖旧版本；
+    # 否则 content hash 会继续基于旧文件计算，导致错误复用旧索引。
+    temp_path = f"{file_path}.uploading"
+    try:
+        with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
+        os.replace(temp_path, file_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     return file_path
 
@@ -233,7 +243,7 @@ def render_score(item: dict):
     if "rerank_score" in item:
         st.write(f"**Reranker 分数**：{item['rerank_score']:.4f}")
     elif "score" in item:
-        st.write(f"**分数（L2 距离）**：{item['score']:.4f}")
+        st.write(f"**相似度分数**：{item['score']:.4f}")
     elif "bm25_score" in item:
         st.write(f"**BM25 分数**：{item['bm25_score']:.4f}")
 
