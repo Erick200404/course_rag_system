@@ -52,6 +52,22 @@ VLM_MODEL = "qwen2.5vl:7b"
 # Ollama 服务地址（与 LLM 共用）
 VLM_BASE_URL = "http://127.0.0.1:11434"
 
+# ==============================
+# RAG 编排（LangGraph）
+# ==============================
+
+# 编排模式：
+# "simple" -> 直线流程（检索 → 重排 → 生成），无分支，适合单轮问答
+# "crag"   -> CRAG 自纠错检索（检索 → 相关性评分 → 不相关则改写查询重试）
+#             有分支与循环，LangGraph 的价值在这里才体现
+RAG_FLOW = "crag"
+
+# CRAG：检索结果不相关时最多改写重试几次（超过则走兜底回答）
+MAX_RETRIEVE_RETRIES = 2
+
+# 多轮对话：注入查询改写的最近对话轮数
+MAX_HISTORY_TURNS = 3
+
 # VLM 单张图片描述的超时（秒）
 VLM_TIMEOUT = 120
 

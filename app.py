@@ -5,7 +5,7 @@ from typing import List
 import requests
 import streamlit as st
 
-from config import RERANK_TOP_K
+from config import MAX_HISTORY_TURNS, RERANK_TOP_K
 from modules.document_loader import SUPPORTED_EXTENSIONS
 
 
@@ -190,7 +190,12 @@ def call_health_api() -> bool:
         return False
 
 
-def call_chat_api(question: str, doc_names: List[str], top_k: int) -> dict:
+def call_chat_api(
+    question: str,
+    doc_names: List[str],
+    top_k: int,
+    history: List[dict] | None = None,
+) -> dict:
     """
     调用 FastAPI 的 /chat 接口，获取 RAG 问答结果。
 
@@ -198,6 +203,7 @@ def call_chat_api(question: str, doc_names: List[str], top_k: int) -> dict:
         question: 用户问题
         doc_names: 参与问答的文档文件名列表
         top_k: 最终召回片段数量
+        history: 对话历史（CRAG 模式下用于多轮查询改写）
 
     返回:
         FastAPI 返回的 JSON 结果
@@ -206,8 +212,12 @@ def call_chat_api(question: str, doc_names: List[str], top_k: int) -> dict:
     payload = {
         "question": question,
         "doc_names": doc_names,
-        "top_k": top_k
+        "top_k": top_k,
     }
+
+    # 传入最近几轮对话，让后端能改写「它指什么」这类依赖上下文的问题
+    if history:
+        payload["history"] = history[-MAX_HISTORY_TURNS:]
 
     try:
         # 发送 POST 请求到 FastAPI 后端
@@ -420,7 +430,8 @@ with right_col:
                     result = call_chat_api(
                         question=question.strip(),
                         doc_names=doc_names,
-                        top_k=top_k
+                        top_k=top_k,
+                        history=st.session_state.chat_history,
                     )
 
                     # 第 3 步：保存结果到会话状态，便于展示历史
@@ -456,6 +467,20 @@ with right_col:
             """,
             unsafe_allow_html=True
         )
+
+        # CRAG 流程信息：改写次数与是否走兜底
+        if result.get("flow") == "crag":
+            if result.get("fallback"):
+                st.caption("⚠️ 检索结果不足以回答，已尝试改写查询后仍走兜底回答")
+            elif result.get("retries"):
+                st.caption(
+                    f"🔁 查询经过 {result['retries']} 次改写重试后命中相关资料"
+                )
+            # 改写后的查询与用户输入不同时展示，便于观察改写效果
+            if result.get("question") and result["question"] != result.get(
+                "original_question", result["question"]
+            ):
+                st.caption(f"改写后的查询：{result['question']}")
 
         # 显示召回到的片段，便于调试和观察检索效果
         if show_chunks:

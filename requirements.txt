@@ -18,6 +18,9 @@ langchain
 langchain-openai
 langchain-ollama
 
+# CRAG 自纠错检索编排（StateGraph）
+langgraph
+
 # 多格式文档解析
 python-docx
 python-pptx

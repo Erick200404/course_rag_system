@@ -22,6 +22,7 @@ from config import (
     VECTOR_STORE_BACKEND,
     CHROMA_PATH,
     VLM_ENABLED,
+    RAG_FLOW,
 )
 
 from modules.doc_registry import (
@@ -47,6 +48,7 @@ from modules.vector_store import (
     faiss_index_exists,
 )
 from modules.rag_chain import generate_answer
+from modules.rag_graph import run_crag
 
 
 # 创建 FastAPI 应用
@@ -71,6 +73,13 @@ _chroma_store: ChromaVectorStore | None = None
 # ==============================
 # 请求数据结构
 # ==============================
+class ChatTurn(BaseModel):
+    """一轮对话历史（用于多轮查询改写）。"""
+
+    question: str = Field(default="", description="该轮的用户问题")
+    answer: str = Field(default="", description="该轮的系统回答")
+
+
 class ChatRequest(BaseModel):
     # 用户问题
     question: str = Field(..., description="用户输入的问题")
@@ -85,6 +94,12 @@ class ChatRequest(BaseModel):
     pdf_names: List[str] | None = Field(
         default=None,
         description="已废弃，请使用 doc_names",
+    )
+
+    # 多轮对话历史（CRAG 模式下用于查询改写）
+    history: List[ChatTurn] | None = Field(
+        default=None,
+        description="最近的对话历史，按时间正序",
     )
 
     # 最终送入大模型的片段数量
@@ -383,16 +398,38 @@ def chat(request: ChatRequest):
     # 构建或加载知识库索引
     index, metadata, kb_id, retriever = build_rag_pipeline(doc_paths)
 
-    # 调用 RAG 逻辑生成答案
-    result = generate_answer(
-        query=question,
-        retriever=retriever,
-        top_k=request.top_k
-    )
+    if RAG_FLOW == "crag":
+        # CRAG：检索 → 评分 → 不相关则改写重试（有分支与循环，交给 LangGraph 编排）
+        result = run_crag(
+            question=question,
+            retriever=retriever,
+            top_k=request.top_k,
+            history=request.history,
+        )
 
-    # 返回结果
-    return {
-        "question": result["query"],
-        "answer": result["answer"],
-        "retrieved_chunks": result["retrieved_chunks"]
-    }
+        return {
+            "question": result["question"],
+            "original_question": result["original_question"],
+            "answer": result["answer"],
+            "retrieved_chunks": result["chunks"],
+            "flow": "crag",
+            "retries": result["retries"],
+            "fallback": result["fallback"],
+        }
+
+    if RAG_FLOW == "simple":
+        # simple：直线流程，无分支，保持最小开销
+        result = generate_answer(
+            query=question,
+            retriever=retriever,
+            top_k=request.top_k
+        )
+
+        return {
+            "question": result["query"],
+            "answer": result["answer"],
+            "retrieved_chunks": result["retrieved_chunks"],
+            "flow": "simple",
+        }
+
+    raise ValueError(f"不支持的 RAG_FLOW: {RAG_FLOW}")

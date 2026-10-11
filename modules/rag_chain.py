@@ -62,6 +62,31 @@ def build_reference_text(retrieved_chunks: List[Dict]) -> str:
     return "\n".join(reference_lines)
 
 
+def build_prompt(query: str, retrieved_chunks: List[Dict]) -> str:
+    """
+    构造送入大模型的完整提示词。
+
+    单独抽出来，供 simple 流程（generate_answer）与 CRAG 图（generate_node）
+    共用，避免两处 prompt 写法不一致。
+    """
+    context = build_context(retrieved_chunks)
+
+    return f"""
+请根据以下课程资料回答问题。
+
+{context}
+
+问题：
+{query}
+
+回答要求：
+1. 只能根据提供的资料回答，不要随意补充资料中没有的信息。
+2. 如果资料不足以回答问题，请明确说“根据当前检索到的资料，无法完整回答该问题”。
+3. 回答要清晰、准确、简洁。
+4. 在回答最后给出参考来源，按“文件名：第x页、第y页”的格式展示。
+"""
+
+
 def generate_answer(query: str, retriever, top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
@@ -92,26 +117,8 @@ def generate_answer(query: str, retriever, top_k: int = 3) -> Dict:
         top_k=top_k
     )
 
-    # 将召回内容拼成 context
-    context = build_context(retrieved_chunks)
-
-    # 构造 prompt
-    prompt = f"""
-请根据以下课程资料回答问题。
-
-{context}
-
-问题：
-{query}
-
-回答要求：
-1. 只能根据提供的资料回答，不要随意补充资料中没有的信息。
-2. 如果资料不足以回答问题，请明确说“根据当前检索到的资料，无法完整回答该问题”。
-3. 回答要清晰、准确、简洁。
-4. 在回答最后给出参考来源，按“文件名：第x页、第y页”的格式展示。
-"""
-
-    # 通过 LCEL 链调用聊天模型生成最终答案
+    # 构造 prompt 并通过 LCEL 链生成答案
+    prompt = build_prompt(query, retrieved_chunks)
     answer = invoke_llm(prompt)
 
     # 生成参考来源文本

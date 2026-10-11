@@ -87,13 +87,17 @@ Answer + Reference
 Python
 FastAPI
 Streamlit
+Chroma（默认向量库，FAISS 兜底）
 FAISS
 BM25
 BGE Reranker
 HuggingFace Embedding
+LangChain LCEL（生成链编排）
+LangGraph（CRAG 自纠错检索编排）
 OpenAI Compatible API
 Ollama (Local LLM)
-PyMuPDF
+PyMuPDF / pymupdf4llm
+RapidOCR（扫描页）
 ```
 
 核心技术包括：
@@ -102,6 +106,7 @@ PyMuPDF
 - Hybrid Retrieval（向量检索 + 关键词检索）
 - Reranking
 - 多文档知识库
+- CRAG 自纠错检索（LangGraph 编排：相关性评分 + 查询改写重试）
 - API 服务化架构
 
 ------
@@ -127,7 +132,8 @@ course_rag_system
 │   ├─ bm25_retriever.py
 │   ├─ hybrid_retriever.py
 │   ├─ reranker.py
-│   └─ rag_chain.py
+│   ├─ rag_chain.py
+│   └─ rag_graph.py         # LangGraph CRAG 自纠错检索编排
 │
 ├─ tests                  # pytest 单元测试
 ├─ conftest.py
@@ -150,7 +156,7 @@ course_rag_system
 建议使用 **conda 环境**
 
 ```
-conda create -n course_rag python=3.10
+conda create -n course_rag python=3.11
 conda activate course_rag
 ```
 
@@ -394,6 +400,30 @@ LLM Backend
 - [x] 上传与 API 入参增加文件名路径校验，拒绝路径穿越
 - [x] 单元测试扩展至 44 个用例
 
+# v3.6.0 LangGraph 编排（CRAG 自纠错检索）
+
+在前几版「直线 RAG 流程」基础上，引入 **LangGraph** 处理真正存在分支与循环的检索场景——**Corrective RAG（CRAG）**：
+
+- [x] 新增 `modules/rag_graph.py`：用 `StateGraph` 组装 CRAG 状态机
+      ```
+      retrieve → grade →[relevant]→ generate → END
+                       →[irrelevant & 重试未耗尽]→ rewrite → retrieve（循环）
+                       →[irrelevant & 重试耗尽]→ fallback → END
+      ```
+      - `retrieve`：混合检索 + 重排（复用 `HybridRetriever` / `rerank_chunks`）
+      - `grade`：让模型判断召回内容能否回答（仅输出 relevant / irrelevant）
+      - `rewrite`：结合多轮历史把指代补全成可独立检索的完整问题
+      - `generate` / `fallback`：复用 `rag_chain.build_prompt` 与 LCEL 链；重试耗尽仍不相关时诚实告知，不编造
+- [x] **关键修复**：检索完全为空（知识库里根本没有相关内容）时直接走兜底，不再无意义地改写重试，避免浪费 LLM 调用与等待
+- [x] 多轮对话：通过 `MAX_HISTORY_TURNS` 注入最近对话，支持指代消解（"它" / "这个方法"）
+- [x] 编排模式可切换：`config.RAG_FLOW = "crag"` 走 CRAG；`"simple"` 退回直线流程（无分支场景保持最小开销）。框架只在「有分支/循环」的地方才引入，符合「框架只用在真正有收益处」的取舍
+- [x] `api/main.py` 与 `app.py` 接入 CRAG：响应新增 `flow` / `retries` / `fallback` / `original_question` 字段，前端展示改写过程与兜底提示
+- [x] 配置项：`RAG_FLOW` / `MAX_RETRIEVE_RETRIES` / `MAX_HISTORY_TURNS`（config.py）
+- [x] 新增 `tests/test_rag_graph.py`（14 个用例：节点、条件边、空检索兜底、改写循环上限、多轮历史）与 `tests/test_api_flow.py`（4 个用例：crag/simple 分派、未知模式、历史透传）
+- [x] 单元测试扩展至 112 个用例
+
+------
+
 # v3.5.0 图片提取 + VLM 描述入库
 
 课件中的图表（架构图 / 流程图 / 公式截图）承载大量知识点，纯文本解析完全丢失。本版本把图片变成可检索的内容：
@@ -466,10 +496,7 @@ INDEX_SCHEMA_VERSION = "faiss-cosine-v2"
 
 规划中（v3.x）：
 
-- [ ] LangChain 基础设施（loaders / splitters / LCEL）
-- [ ] 扫描页 OCR 路由（按页文本密度检测，PaddleOCR / MinerU）
-- [ ] 图片提取 + VLM 描述入库（qwen2.5vl via Ollama）
-- [ ] LangGraph 编排（Query Rewrite / 多轮对话 / CRAG 自纠错检索）
+原定路线图已全部完成（v3.3 多格式接入 + LCEL、v3.4 扫描页 OCR 路由、v3.5 图片提取 + VLM 描述入库、v3.6 LangGraph CRAG 自纠错检索均已交付）。后续可探索方向见「未来优化方向」。
 
 ------
 
@@ -616,7 +643,7 @@ BM25 Retrieval
 
 ## rag_chain.py
 
-负责完整 RAG 流程：
+负责「直线流程」RAG 编排（simple 模式），并抽取出被 CRAG 复用的公共逻辑：
 
 ```
 Query
@@ -625,34 +652,31 @@ Hybrid Retrieval
  ↓
 Reranker
  ↓
-Context
+Context（build_prompt 拼装）
  ↓
-LLM
+LLM（invoke_llm -> LCEL 链）
  ↓
 Answer
 ```
 
-LLM 调用支持多 backend：
-
-API 模型：
-
-```
-deepseek-chat
-POST /v1/chat/completions
-```
-
-本地模型：
-
-```
-deepseek-r1:7b
-POST /api/generate
-```
+- `generate_answer`：simple 模式入口，检索 → 重排 → 生成带引用的答案
+- `build_prompt` / `build_context`：上下文拼装，被 `rag_graph.generate_node` 直接复用，保证两条路径的 prompt 一致
+- LLM 调用统一走 `modules/llm_backends.invoke_llm`（LangChain LCEL，ChatOpenAI / ChatOllama），不再手写 HTTP 请求
 
 同时生成：
 
 ```
-引用来源（文件 + 页码）
+引用来源（文件 + 页码 + 图片）
 ```
+
+## rag_graph.py
+
+LangGraph `StateGraph` 编排层（crag 模式），只在「存在分支与循环」的检索场景引入：
+
+- 节点：`retrieve` / `grade` / `rewrite` / `generate` / `fallback`，状态在 `RagState` 中流转（question / history / chunks / relevant / retries / answer / fallback）
+- 条件边 `route_after_grade`：相关则生成；不相关且未超 `MAX_RETRIEVE_RETRIES` 则改写重试；检索为空或重试耗尽则兜底
+- 检索、重排、生成全部复用 `HybridRetriever` / `rerank_chunks` / `rag_chain` 的现有实现，本模块只做编排，不重复造轮子
+- 多轮对话通过 `MAX_HISTORY_TURNS` 注入最近历史，支持指代消解
 
 ------
 
