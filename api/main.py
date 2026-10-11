@@ -5,8 +5,10 @@ import hashlib
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List
+from threading import RLock
+from contextlib import nullcontext
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from config import (
@@ -49,6 +51,7 @@ from modules.vector_store import (
 )
 from modules.rag_chain import generate_answer
 from modules.rag_graph import run_crag
+from modules import workspace_store as workspace
 
 
 # 创建 FastAPI 应用
@@ -68,6 +71,14 @@ app = FastAPI(
 _retriever_cache: OrderedDict[str, HybridRetriever] = OrderedDict()
 _RETRIEVER_CACHE_LIMIT = 8
 _chroma_store: ChromaVectorStore | None = None
+_course_stores: Dict[str, ChromaVectorStore] = {}
+_course_locks: Dict[str, RLock] = {}
+_locks_guard = RLock()
+
+
+def course_lock(course_id: str) -> RLock:
+    with _locks_guard:
+        return _course_locks.setdefault(course_id, RLock())
 
 
 # ==============================
@@ -83,6 +94,7 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     # 用户问题
     question: str = Field(..., description="用户输入的问题")
+    session_id: str | None = Field(default=None, description="持久化问答会话编号")
 
     # 要使用的文档文件名列表（文件需已存在于 data 目录中）
     doc_names: List[str] | None = Field(
@@ -103,7 +115,95 @@ class ChatRequest(BaseModel):
     )
 
     # 最终送入大模型的片段数量
-    top_k: int = Field(default=RERANK_TOP_K, description="最终召回片段数量")
+    top_k: int = Field(default=RERANK_TOP_K, ge=1, le=10, description="最终召回片段数量")
+
+
+class CourseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class SessionCreate(BaseModel):
+    title: str = Field(default="新会话", max_length=100)
+
+
+class DocumentSelection(BaseModel):
+    doc_names: List[str]
+
+
+def workspace_call(function, *args):
+    try:
+        return function(*args)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/courses")
+def courses():
+    return workspace.list_courses()
+
+
+@app.post("/courses", status_code=201)
+def add_course(request: CourseCreate):
+    return workspace_call(workspace.create_course, request.name)
+
+
+@app.get("/courses/{course_id}/documents")
+def course_documents(course_id: str):
+    return workspace_call(workspace.list_course_documents, course_id)
+
+
+@app.put("/courses/{course_id}/documents/{filename}")
+async def upload_course_document(course_id: str, filename: str, request: Request):
+    workspace_call(workspace.get_course, course_id)
+    workspace_call(workspace.validate_filename, filename)
+    if not is_supported(filename):
+        raise HTTPException(status_code=400, detail="不支持的文件格式")
+    # Stream the body with a bound instead of loading an unbounded request.
+    content = bytearray()
+    async for piece in request.stream():
+        content.extend(piece)
+        if len(content) > workspace.MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="文件不能超过 200MB")
+    from starlette.concurrency import run_in_threadpool
+
+    def save():
+        with course_lock(course_id):
+            return workspace_call(workspace.save_course_document, course_id, filename, bytes(content))
+
+    return await run_in_threadpool(save)
+
+
+@app.get("/courses/{course_id}/sessions")
+def course_sessions(course_id: str):
+    return workspace_call(workspace.list_sessions, course_id)
+
+
+@app.post("/courses/{course_id}/sessions", status_code=201)
+def add_session(course_id: str, request: SessionCreate):
+    return workspace_call(workspace.create_session, course_id, request.title)
+
+
+@app.get("/sessions/{session_id}")
+def session_detail(session_id: str):
+    return workspace_call(workspace.get_session, session_id)
+
+
+@app.patch("/sessions/{session_id}/documents")
+def session_documents(session_id: str, request: DocumentSelection):
+    session = workspace_call(workspace.get_session, session_id)
+    with course_lock(session["course_id"]):
+        workspace_call(workspace.select_session_documents, session_id, request.doc_names)
+    return {"status": "ok"}
+
+
+@app.delete("/sessions/{session_id}/turns")
+def clear_session_history(session_id: str):
+    session = workspace_call(workspace.get_session, session_id)
+    with course_lock(session["course_id"]):
+        workspace.clear_turns(session_id)
+    return {"status": "ok"}
 
 
 # ==============================
@@ -150,8 +250,19 @@ def _cache_retriever(cache_key: str, index: Any, metadata: List[Dict[str, Any]])
     return retriever
 
 
-def _get_chroma_store() -> ChromaVectorStore:
+def _get_chroma_store(course_id: str | None = None) -> ChromaVectorStore:
     global _chroma_store
+
+    if course_id is not None:
+        if course_id not in _course_stores:
+            fingerprint = hashlib.md5(
+                f"{EMBEDDING_BACKEND}:{get_current_embedding_model()}:{_pipeline_fingerprint()}".encode("utf-8")
+            ).hexdigest()[:12]
+            _course_stores[course_id] = ChromaVectorStore(
+                path=str(workspace.course_storage_dir(course_id) / "chroma"),
+                collection_name=f"course_chunks_{fingerprint}",
+            )
+        return _course_stores[course_id]
 
     if _chroma_store is None:
         fingerprint = hashlib.md5(
@@ -181,11 +292,12 @@ def get_kb_storage_paths(kb_id: str) -> tuple[str, str]:
     return index_path, metadata_path
 
 
-def _build_faiss_pipeline(doc_paths: List[str]):
+def _build_faiss_pipeline(doc_paths: List[str], course_id: str | None = None):
     """
     Legacy full-selection FAISS pipeline, retained as a fallback backend.
     """
-    register_documents(doc_paths)
+    registry = str(workspace.course_storage_dir(course_id) / "registry.db") if course_id else None
+    register_documents(doc_paths, db_path=registry)
 
     kb_id = compute_kb_id(
         doc_paths,
@@ -194,6 +306,11 @@ def _build_faiss_pipeline(doc_paths: List[str]):
         index_schema_version=_pipeline_fingerprint(),
     )
     index_path, metadata_path = get_kb_storage_paths(kb_id)
+    if course_id:
+        directory = workspace.course_storage_dir(course_id) / kb_id
+        index_path = str(directory / "faiss_index.bin")
+        metadata_path = str(directory / "metadata.pkl")
+        kb_id = f"{course_id}:{kb_id}"
     print(f"当前 FAISS 知识库 kb_id: {kb_id}")
 
     if faiss_index_exists(index_path, metadata_path):
@@ -260,7 +377,7 @@ def _build_image_chunks(doc_path: str, doc_hash: str, source: str) -> List[Dict[
     return [build_image_chunk(image, image["caption"], source) for image in captioned]
 
 
-def _build_chroma_pipeline(doc_paths: List[str]):
+def _build_chroma_pipeline(doc_paths: List[str], course_id: str | None = None):
     """
     Build or update a persistent Chroma index incrementally.
 
@@ -277,17 +394,18 @@ def _build_chroma_pipeline(doc_paths: List[str]):
         for path in sorted_paths
     }
 
-    store = _get_chroma_store()
+    store = _get_chroma_store(course_id) if course_id else _get_chroma_store()
+    registry = str(workspace.course_storage_dir(course_id) / "registry.db") if course_id else None
 
     # Remove vectors for a filename whose content hash changed before the
     # registry row is overwritten. This also covers the case where the new
     # version yields no parseable chunks (then upsert never runs).
     for source, current in current_records.items():
-        previous = get_document(source)
+        previous = get_document(source, db_path=registry)
         if previous and previous["sha256"] != current["sha256"]:
             store.delete_document(previous["sha256"], source)
 
-    register_documents(sorted_paths)
+    register_documents(sorted_paths, db_path=registry)
 
     for source, current in current_records.items():
         # 内容未变化则跳过解析与 embedding，直接复用已有向量
@@ -317,7 +435,8 @@ def _build_chroma_pipeline(doc_paths: List[str]):
         store.upsert_document(current["sha256"], source, embedded_chunks)
 
     doc_hashes = [record["sha256"] for record in current_records.values()]
-    metadata = store.get_documents(doc_hashes)
+    sources = list(current_records)
+    metadata = store.get_documents(doc_hashes, sources=sources)
     if not metadata:
         raise RuntimeError("Chroma 知识库为空，请检查文档是否包含可解析文本")
 
@@ -327,21 +446,23 @@ def _build_chroma_pipeline(doc_paths: List[str]):
         embedding_model=get_current_embedding_model(),
         index_schema_version=_pipeline_fingerprint(),
     )
-    index = store.for_documents(doc_hashes)
+    index = store.for_documents(doc_hashes, sources=sources)
+    if course_id:
+        selection_id = f"{course_id}:{selection_id}"
 
     print(f"当前 Chroma 选择集 kb_id: {selection_id}")
     return index, metadata, selection_id, _cache_retriever(selection_id, index, metadata)
 
 
-def build_rag_pipeline(doc_paths: List[str]):
+def build_rag_pipeline(doc_paths: List[str], course_id: str | None = None):
     """
     Build the retrieval backend configured by VECTOR_STORE_BACKEND.
     """
     if VECTOR_STORE_BACKEND == "chroma":
-        return _build_chroma_pipeline(doc_paths)
+        return _build_chroma_pipeline(doc_paths, course_id=course_id)
 
     if VECTOR_STORE_BACKEND == "faiss":
-        return _build_faiss_pipeline(doc_paths)
+        return _build_faiss_pipeline(doc_paths, course_id=course_id)
 
     raise ValueError(f"不支持的 VECTOR_STORE_BACKEND: {VECTOR_STORE_BACKEND}")
 
@@ -351,6 +472,14 @@ def build_rag_pipeline(doc_paths: List[str]):
 # ==============================
 @app.post("/chat")
 def chat(request: ChatRequest):
+    session = workspace_call(workspace.get_session, request.session_id) if request.session_id else None
+    # Serialize writes and retrieval within a course: concurrent uploads cannot
+    # replace files while their old vectors are being queried or rebuilt.
+    with course_lock(session["course_id"]) if session else nullcontext():
+        return _chat(request)
+
+
+def _chat(request: ChatRequest):
     """
     根据指定文档文件和问题，返回 RAG 问答结果。
     """
@@ -362,7 +491,12 @@ def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="question 不能为空")
 
     # doc_names 为主字段，pdf_names 仅为旧版前端兼容
-    doc_names = request.doc_names or request.pdf_names
+    session = workspace_call(workspace.get_session, request.session_id) if request.session_id else None
+    doc_names = request.doc_names if request.doc_names is not None else request.pdf_names
+    if session and doc_names is None:
+        doc_names = session["selected_documents"]
+        if doc_names is None:
+            doc_names = [doc["name"] for doc in workspace.list_course_documents(session["course_id"])]
 
     # 检查文档文件名列表是否为空
     if not doc_names:
@@ -371,11 +505,7 @@ def chat(request: ChatRequest):
     # 将文件名转为 data 目录下的路径
     doc_paths = []
     for doc_name in doc_names:
-        if Path(doc_name).name != doc_name:
-            raise HTTPException(
-                status_code=400,
-                detail="doc_names 中只能包含文件名，不能包含路径"
-            )
+        workspace_call(workspace.validate_filename, doc_name)
 
         if not is_supported(doc_name):
             raise HTTPException(
@@ -384,7 +514,8 @@ def chat(request: ChatRequest):
                        f"当前支持 {', '.join(SUPPORTED_EXTENSIONS)}"
             )
 
-        doc_path = os.path.join("data", doc_name)
+        doc_path = (workspace_call(workspace.resolve_documents, session["course_id"], [doc_name])[0]
+                    if session else os.path.join("data", doc_name))
 
         # 检查文件是否存在
         if not os.path.exists(doc_path):
@@ -396,7 +527,15 @@ def chat(request: ChatRequest):
         doc_paths.append(doc_path)
 
     # 构建或加载知识库索引
-    index, metadata, kb_id, retriever = build_rag_pipeline(doc_paths)
+    if session:
+        workspace.select_session_documents(session["id"], doc_names)
+        index, metadata, kb_id, retriever = build_rag_pipeline(doc_paths, course_id=session["course_id"])
+        # Server-owned history prevents one session from borrowing another's context.
+        history = [{"question": turn["question"], "answer": turn["result"]["answer"]}
+                   for turn in session["turns"]]
+    else:
+        index, metadata, kb_id, retriever = build_rag_pipeline(doc_paths)
+        history = request.history
 
     if RAG_FLOW == "crag":
         # CRAG：检索 → 评分 → 不相关则改写重试（有分支与循环，交给 LangGraph 编排）
@@ -404,10 +543,10 @@ def chat(request: ChatRequest):
             question=question,
             retriever=retriever,
             top_k=request.top_k,
-            history=request.history,
+            history=history,
         )
 
-        return {
+        response = {
             "question": result["question"],
             "original_question": result["original_question"],
             "answer": result["answer"],
@@ -416,6 +555,9 @@ def chat(request: ChatRequest):
             "retries": result["retries"],
             "fallback": result["fallback"],
         }
+        if session:
+            workspace.append_turn(session["id"], question, response)
+        return response
 
     if RAG_FLOW == "simple":
         # simple：直线流程，无分支，保持最小开销
@@ -425,11 +567,14 @@ def chat(request: ChatRequest):
             top_k=request.top_k
         )
 
-        return {
+        response = {
             "question": result["query"],
             "answer": result["answer"],
             "retrieved_chunks": result["retrieved_chunks"],
             "flow": "simple",
         }
+        if session:
+            workspace.append_turn(session["id"], question, response)
+        return response
 
     raise ValueError(f"不支持的 RAG_FLOW: {RAG_FLOW}")

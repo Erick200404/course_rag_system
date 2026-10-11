@@ -1,6 +1,51 @@
 
 # 基于 RAG 的课程 PDF 智能问答与复习辅助系统
 
+## 当前使用方式：课程资料库与持久化会话
+
+系统按「课程 → 问答会话」组织资料与对话：
+
+1. 在侧栏创建课程，例如「机器学习」「数据库」。
+2. 上传该课程的课件或笔记；文件上传后立即由 FastAPI 保存，不需要先提问。
+3. 新建问答会话，选择该会话使用的资料。一个课程可包含多个独立会话。
+4. 提问时按需建立或更新检索索引；后端保存问题、答案、引用依据及检索结果。
+5. 重新打开页面，可选择已有课程和会话继续讨论；URL 中的课程与会话 ID 可用于恢复当前页面。
+
+不同课程的同名文件、注册表和向量索引彼此隔离。同一课程的会话共用资料库，分别保存资料选择与历史。
+「清空当前会话」只删除该会话的问答记录，不删除课程资料，也不影响其他会话。
+
+持久化布局（路径相对于启动项目的工作目录）：
+
+```text
+data/courses/<course_id>/<filename>       原始课程资料
+storage/workspace.db                     课程、资料目录、会话、资料选择、完整问答结果
+storage/courses/<course_id>/registry.db  内容哈希注册表
+storage/courses/<course_id>/chroma/      Chroma 持久化索引（默认）
+storage/courses/<course_id>/<kb_id>/     FAISS 索引与 metadata（备用配置）
+storage/images/<doc_hash>/              PDF 提取图片
+```
+
+前端负责交互，文件上传、课程管理、会话历史和检索均由后端负责。Streamlit 的 session_state
+仅保存临时界面状态；重新打开页面时以 SQLite 中的数据为准。当前面向个人单用户使用。
+旧版 `POST /chat` 的 `doc_names` / `pdf_names` 调用方式继续兼容；新版前端传 `session_id`，
+由后端读取对应课程与历史。旧版仅保存在浏览器 session_state 的聊天记录无法在会话关闭后恢复。
+旧版 `data/` 根目录的文件仍保留，可重新上传到指定课程建立新的课程归属。
+
+主要新增接口：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /courses` / `POST /courses` | 查看、创建课程 |
+| `GET /courses/{id}/documents` | 查看课程已有资料 |
+| `PUT /courses/{id}/documents/{filename}` | 原始二进制文件上传（立即保存） |
+| `GET /courses/{id}/sessions` / `POST /courses/{id}/sessions` | 查看、创建会话 |
+| `GET /sessions/{id}` | 恢复完整会话 |
+| `PATCH /sessions/{id}/documents` | 保存会话资料选择 |
+| `DELETE /sessions/{id}/turns` | 清空当前会话历史 |
+
+前端使用 Streamlit 1.65+ 的原生会话组件与暖纸主题。顶部原生侧栏展开入口保持可见，
+收起侧栏后可通过左上角按钮重新打开。修改后需重启前后端以加载新接口和主题。
+
 ## 一、项目简介
 
 本项目实现了一个 **基于 Retrieval-Augmented Generation (RAG)** 的课程资料智能问答系统。

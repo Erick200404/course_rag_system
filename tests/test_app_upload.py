@@ -1,7 +1,7 @@
 import os
 import pytest
 
-from app import save_uploaded_file
+from modules.file_storage import save_uploaded_file
 
 
 class FakeUploadedFile:

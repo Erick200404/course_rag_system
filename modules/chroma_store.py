@@ -22,15 +22,17 @@ class ChromaVectorView:
 
     is_chroma_view = True
 
-    def __init__(self, store: "ChromaVectorStore", doc_hashes: List[str]):
+    def __init__(self, store: "ChromaVectorStore", doc_hashes: List[str], sources: List[str] | None = None):
         self.store = store
         self.doc_hashes = doc_hashes
+        self.sources = sources
 
     def search(self, query_embedding: QueryEmbedding, top_k: int) -> List[EmbeddingChunk]:
         return self.store.query(
             query_embedding=query_embedding,
             doc_hashes=self.doc_hashes,
             top_k=top_k,
+            sources=self.sources,
         )
 
 
@@ -142,13 +144,18 @@ class ChromaVectorStore:
         )
         return bool(result.get("ids"))
 
-    def get_documents(self, doc_hashes: List[str]) -> List[EmbeddingChunk]:
+    @staticmethod
+    def _selection_filter(doc_hashes: List[str], sources: List[str] | None = None) -> dict:
+        hashes = {"doc_hash": {"$in": doc_hashes}}
+        return {"$and": [hashes, {"source": {"$in": sources}}]} if sources is not None else hashes
+
+    def get_documents(self, doc_hashes: List[str], sources: List[str] | None = None) -> List[EmbeddingChunk]:
         """Return chunk metadata for the selected documents."""
-        if not doc_hashes:
+        if not doc_hashes or sources == []:
             return []
 
         result = self.collection.get(
-            where={"doc_hash": {"$in": doc_hashes}},
+            where=self._selection_filter(doc_hashes, sources),
             include=["documents", "metadatas"],
         )
 
@@ -168,15 +175,16 @@ class ChromaVectorStore:
         query_embedding: QueryEmbedding,
         doc_hashes: List[str],
         top_k: int,
+        sources: List[str] | None = None,
     ) -> List[EmbeddingChunk]:
         """Query only the selected documents using cosine similarity."""
-        if not doc_hashes or top_k <= 0:
+        if not doc_hashes or sources == [] or top_k <= 0:
             return []
 
         result = self.collection.query(
             query_embeddings=[list(query_embedding)],
             n_results=top_k,
-            where={"doc_hash": {"$in": doc_hashes}},
+            where=self._selection_filter(doc_hashes, sources),
             include=["documents", "metadatas", "distances"],
         )
 
@@ -194,5 +202,5 @@ class ChromaVectorStore:
 
         return chunks
 
-    def for_documents(self, doc_hashes: List[str]) -> ChromaVectorView:
-        return ChromaVectorView(self, doc_hashes)
+    def for_documents(self, doc_hashes: List[str], sources: List[str] | None = None) -> ChromaVectorView:
+        return ChromaVectorView(self, doc_hashes, sources)

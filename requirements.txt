@@ -1,6 +1,6 @@
 pymupdf
 pymupdf4llm
-streamlit
+streamlit>=1.65,<2
 fastapi
 uvicorn
 faiss-cpu

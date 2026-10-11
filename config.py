@@ -137,5 +137,5 @@ CHAT_MODEL = "deepseek-chat"
 
 # Ollama 本地配置
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-OLLAMA_MODEL = "deepseek-r1:7b"
+OLLAMA_MODEL = "deepseek-r1:8b"
 OLLAMA_TIMEOUT = 120
