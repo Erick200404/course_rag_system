@@ -106,6 +106,9 @@ class ChromaVectorStore:
             }
             if chunk.get("heading"):
                 metadata["heading"] = str(chunk["heading"])
+            # 图片描述 chunk 携带原图路径，前端召回时可展示原图
+            if chunk.get("image_path"):
+                metadata["image_path"] = str(chunk["image_path"])
             metadatas.append(metadata)
 
         self.collection.upsert(

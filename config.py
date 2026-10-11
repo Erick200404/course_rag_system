@@ -29,6 +29,32 @@ OCR_BACKEND = "rapidocr"
 # 典型参考：A4 满页文本约 3~6，扫描页（无文字层）约 0。
 SCAN_TEXT_DENSITY_THRESHOLD = 0.1
 
+# ==============================
+# 图片提取 + VLM 描述
+# ==============================
+
+# 是否启用 PDF 图片提取与 VLM 描述入库
+# 课件中的图表往往承载关键知识点，纯文本解析完全丢失这部分内容
+IMAGE_EXTRACT_ENABLED = True
+
+# 图片提取后存放目录（按文档 hash 分目录）
+IMAGE_STORE_PATH = os.path.join("storage", "images")
+
+# 过滤小图：宽或高低于该像素数的图片忽略（图标/装饰线条）
+IMAGE_MIN_SIZE = 128
+
+# 是否调用视觉模型生成图片描述
+VLM_ENABLED = True
+
+# Ollama 视觉模型（需提前 ollama pull）
+VLM_MODEL = "qwen2.5vl:7b"
+
+# Ollama 服务地址（与 LLM 共用）
+VLM_BASE_URL = "http://127.0.0.1:11434"
+
+# VLM 单张图片描述的超时（秒）
+VLM_TIMEOUT = 120
+
 # 索引结构版本。检索算法或 metadata 结构变化时更新该值，
 # 避免旧 FAISS 索引被新代码误加载。
 INDEX_SCHEMA_VERSION = "faiss-cosine-v2"

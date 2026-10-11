@@ -394,6 +394,23 @@ LLM Backend
 - [x] 上传与 API 入参增加文件名路径校验，拒绝路径穿越
 - [x] 单元测试扩展至 44 个用例
 
+# v3.5.0 图片提取 + VLM 描述入库
+
+课件中的图表（架构图 / 流程图 / 公式截图）承载大量知识点，纯文本解析完全丢失。本版本把图片变成可检索的内容：
+
+- [x] 新增 `modules/image_extractor.py`：PDF 内嵌图片提取
+      - 按 xref 去重（同一图片多页引用只提取一次），保存到 `storage/images/<doc_hash>/`
+      - 尺寸过滤（默认 128px 以下忽略图标/装饰），重复提取复用已保存文件
+- [x] 新增 `modules/vlm_captioner.py`：调用 **Ollama 视觉模型**（默认 `qwen2.5vl:7b`，`/api/chat` + base64）生成中文描述
+      - 提示词约束输出为客观的图表知识点描述（图表类型 / 核心信息 / 公式转写）
+      - 降级策略：Ollama 不可达立即停止剩余图片；单张失败跳过；均不影响文本入库
+- [x] 图片 chunk 入库：描述文本作为 chunk 参与检索，metadata 携带 `image_path`，前端召回时直接展示原图
+- [x] 配置项：`IMAGE_EXTRACT_ENABLED` / `IMAGE_MIN_SIZE` / `VLM_ENABLED` / `VLM_MODEL` / `VLM_TIMEOUT`
+- [x] 单元测试扩展至 94 个用例（新增图片提取 / VLM 伪造调用 / 端到端入库与检索 12 个）
+- [x] 冒烟验证：图片提取（含小图过滤）与 Ollama 离线降级均符合预期；真实 VLM 描述需本机 `ollama pull qwen2.5vl:7b` 后启用
+
+------
+
 # v3.4.0 扫描页 OCR 路由
 
 - [x] 新增 `modules/ocr_router.py`：扫描页自动检测与 OCR 提取

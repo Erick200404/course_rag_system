@@ -71,6 +71,85 @@ def chroma_env(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _make_pdf_with_image(path, lines, image_data):
+    """生成带文字和嵌入图片的 PDF。"""
+    doc = fitz.open()
+    page = doc.new_page()
+
+    y = 100
+    for text, fontsize in lines:
+        page.insert_text((72, y), text, fontsize=fontsize, fontname=CJK_FONT)
+        y += fontsize + 24
+
+    page.insert_image(fitz.Rect(72, y, 372, y + 200), stream=image_data)
+
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def _png_bytes(width=300, height=200):
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, width, height))
+    pix.set_rect(pix.irect, (30, 100, 200))
+    data = pix.tobytes("png")
+    return data
+
+
+def test_image_chunks_indexed_and_queryable(chroma_env, monkeypatch):
+    """
+    端到端：带图 PDF 建库后，图片描述 chunk 与文本 chunk 一起入库，
+    召回时携带 image_path。
+    """
+    import modules.image_extractor as image_extractor
+    import modules.vlm_captioner as vlm_captioner
+
+    monkeypatch.setattr(api_main, "IMAGE_EXTRACT_ENABLED", True)
+    monkeypatch.setattr(api_main, "VLM_ENABLED", True)
+    monkeypatch.setattr(
+        image_extractor, "IMAGE_STORE_PATH", str(chroma_env / "images")
+    )
+    # 伪造 VLM：把图片描述为固定的中文描述
+    monkeypatch.setattr(
+        vlm_captioner, "caption_image", lambda path, model=None: "检索系统架构示意图"
+    )
+
+    pdf = _make_pdf_with_image(
+        chroma_env / "fig.pdf",
+        [("第一章 检索增强生成", 20)],
+        _png_bytes(),
+    )
+
+    index, metadata, _, retriever = api_main._build_chroma_pipeline([pdf])
+
+    # 图片 chunk 已入库，携带 image_path 与固定 heading
+    image_chunks = [chunk for chunk in metadata if chunk.get("image_path")]
+    assert len(image_chunks) == 1
+    assert image_chunks[0]["heading"] == "课件图片"
+    assert "检索系统架构示意图" in image_chunks[0]["text"]
+
+    # 用描述内容检索，应能召回图片 chunk
+    results = retriever.retrieve("检索系统架构")
+    assert any(item.get("image_path") for item in results)
+
+
+def test_image_chunks_skipped_when_disabled(chroma_env, monkeypatch):
+    """IMAGE_EXTRACT_ENABLED=False 时不提取图片。"""
+    monkeypatch.setattr(api_main, "IMAGE_EXTRACT_ENABLED", False)
+
+    pdf = _make_pdf_with_image(
+        chroma_env / "fig.pdf",
+        [
+            ("第一章 检索增强生成", 20),
+            ("本章系统介绍检索增强生成技术在课程资料问答系统中的具体应用方式与工程实践要点。", 11),
+        ],
+        _png_bytes(),
+    )
+
+    _, metadata, _, _ = api_main._build_chroma_pipeline([pdf])
+
+    assert not any(chunk.get("image_path") for chunk in metadata)
+
+
 def test_pipeline_indexes_selected_documents(chroma_env):
     pdf_a = _make_pdf(
         chroma_env / "a.pdf",

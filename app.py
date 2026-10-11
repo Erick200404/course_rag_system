@@ -470,9 +470,18 @@ with right_col:
                 if heading:
                     label += f" | {heading}"
 
+                # 图片 chunk 额外标注
+                image_path = item.get("image_path", "")
+                if image_path:
+                    label += " | 🖼️ 课件图片"
+
                 with st.expander(label):
                     render_score(item)
                     st.write(item.get("text", ""))
+
+                    # 图片描述 chunk 直接展示原图
+                    if image_path and os.path.exists(image_path):
+                        st.image(image_path)
 
     # -----------------------------
     # 显示历史问答

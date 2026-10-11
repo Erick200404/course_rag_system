@@ -17,9 +17,11 @@ from config import (
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     INDEX_SCHEMA_VERSION,
+    IMAGE_EXTRACT_ENABLED,
     PDF_PARSE_BACKEND,
     VECTOR_STORE_BACKEND,
     CHROMA_PATH,
+    VLM_ENABLED,
 )
 
 from modules.doc_registry import (
@@ -204,6 +206,45 @@ def _build_faiss_pipeline(doc_paths: List[str]):
     return index, metadata, kb_id, _cache_retriever(kb_id, index, metadata)
 
 
+def _build_image_chunks(doc_path: str, doc_hash: str, source: str) -> List[Dict[str, Any]]:
+    """
+    PDF 图片提取 + VLM 描述，返回可入库的图片 chunk 列表。
+
+    仅对 PDF 文件生效；提取/描述失败或未启用时返回空列表，不影响文本入库。
+    """
+    if not str(doc_path).lower().endswith(".pdf"):
+        return []
+
+    if not IMAGE_EXTRACT_ENABLED:
+        return []
+
+    try:
+        from modules.image_extractor import extract_document_images
+        images = extract_document_images(doc_path, doc_hash)
+    except Exception as e:
+        print(f"[警告] {source} 图片提取失败，跳过图片入库：{e}")
+        return []
+
+    if not images:
+        return []
+
+    print(f"[图片] {source}：提取到 {len(images)} 张图片")
+
+    if not VLM_ENABLED:
+        return []
+
+    try:
+        from modules.vlm_captioner import caption_images
+        captioned = caption_images(images, source)
+    except Exception as e:
+        print(f"[警告] {source} 图片描述生成失败，跳过图片入库：{e}")
+        return []
+
+    from modules.image_extractor import build_image_chunk
+
+    return [build_image_chunk(image, image["caption"], source) for image in captioned]
+
+
 def _build_chroma_pipeline(doc_paths: List[str]):
     """
     Build or update a persistent Chroma index incrementally.
@@ -250,6 +291,11 @@ def _build_chroma_pipeline(doc_paths: List[str]):
         # 跳过而不是抛错，避免单个坏文件让整次问答失败。
         if not chunks:
             print(f"[警告] {source} 未解析出可索引内容，已跳过（可能为扫描版 PDF）")
+
+        # PDF 图片提取 + VLM 描述，生成可检索的图片 chunk
+        chunks.extend(_build_image_chunks(current["path"], current["sha256"], source))
+
+        if not chunks:
             continue
 
         embedded_chunks = embed_chunks(chunks)
