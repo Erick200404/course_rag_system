@@ -46,6 +46,16 @@ IMAGE_MIN_SIZE = 128
 # 是否调用视觉模型生成图片描述
 VLM_ENABLED = True
 
+# 图片理解后端，独立于文字问答的 LLM_BACKEND。
+# "api" -> 智增增 OpenAI-compatible 接口，复用 .env 的 ZHI_API_KEY / ZHI_BASE_URL
+# "ollama" -> 本地视觉模型
+VLM_BACKEND = "api"
+
+# 豆包低成本视觉模型（智增增模型 ID）
+VLM_API_MODEL = "doubao-seed-2-0-mini-260215"
+# 限制图片描述的输出长度；豆包 API 关闭深度思考。
+VLM_MAX_TOKENS = 512
+
 # Ollama 视觉模型（需提前 ollama pull）
 VLM_MODEL = "qwen2.5vl:7b"
 

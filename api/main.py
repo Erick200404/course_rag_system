@@ -26,6 +26,7 @@ from config import (
     VECTOR_STORE_BACKEND,
     CHROMA_PATH,
     VLM_ENABLED,
+    IMAGE_MIN_SIZE,
     RAG_FLOW,
 )
 
@@ -299,9 +300,13 @@ def get_current_embedding_model() -> str:
 
 
 def _pipeline_fingerprint() -> str:
+    from modules.vlm_captioner import caption_fingerprint
+
     return (
         f"{INDEX_SCHEMA_VERSION}:{VECTOR_STORE_BACKEND}:"
-        f"{PDF_PARSE_BACKEND}:{CHUNK_SIZE}:{CHUNK_OVERLAP}"
+        f"{PDF_PARSE_BACKEND}:{CHUNK_SIZE}:{CHUNK_OVERLAP}:"
+        f"images={IMAGE_EXTRACT_ENABLED}:{IMAGE_MIN_SIZE}:vlm={VLM_ENABLED}:"
+        f"{caption_fingerprint() if IMAGE_EXTRACT_ENABLED and VLM_ENABLED else 'disabled'}"
     )
 
 

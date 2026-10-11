@@ -485,6 +485,30 @@ LLM Backend
 
 # v3.5.0 图片提取 + VLM 描述入库
 
+当前图片理解支持 API / Ollama 两种后端，独立于文字问答的后端设置：
+
+```python
+# config.py：默认通过智增增调用豆包
+VLM_BACKEND = "api"
+VLM_API_MODEL = "doubao-seed-2-0-mini-260215"
+VLM_MAX_TOKENS = 512
+
+# 切回本地时设置 VLM_BACKEND = "ollama"
+VLM_MODEL = "qwen2.5vl:7b"
+VLM_BASE_URL = "http://127.0.0.1:11434"
+```
+
+API 直接复用 `.env` 中现有的 `ZHI_API_KEY` 和 `ZHI_BASE_URL`，无需新增密钥；
+未设置地址时使用 `https://api.zhizengzeng.com/v1`。通过 `/chat/completions`
+发送 base64 图片和描述提示词，豆包关闭深度思考。模型 ID 参考
+[智增增模型列表](https://doc.zhizengzeng.com/doc-3979947)。图片会发送到该 API 服务。
+
+修改配置后重启 FastAPI。图片后端、模型、提示词和图片处理开关参与索引版本计算，
+下次提问会按新配置重新建库，以补充旧索引未生成的图片描述，无需重传课程文件。
+成功描述随图片 chunk 持久化，索引命中时无需再次调用；描述失败时保留文本问答能力。
+失败图片不会自动重试补库，修复服务后可删除并重新上传该资料，触发重新建库。
+鉴权、额度、模型配置或服务故障会终止本批图片调用并在终端告警，不输出密钥和图片内容。
+
 课件中的图表（架构图 / 流程图 / 公式截图）承载大量知识点，纯文本解析完全丢失。本版本把图片变成可检索的内容：
 
 - [x] 新增 `modules/image_extractor.py`：PDF 内嵌图片提取
@@ -764,7 +788,7 @@ LangGraph `StateGraph` 编排层（crag 模式），只在「存在分支与循�
 - 模型连接失败返回 HTTP 503 和可读的 `detail`；推理超时返回 HTTP 504。生成、CRAG 相关性判断和查询改写均使用这一错误边界，失败请求不写入会话问答记录。
 - 首次提问可能包含 PDF/OCR 解析、图片描述、模型加载和索引构建；后续缓存命中时通常省去建库工作。OCR、BM25 等环节仍可能使用 CPU，embedding/reranker 的 CUDA 使用情况以终端日志为准。
 - CRAG 通常先判断相关性再生成答案，不相关时还会改写和重新检索。`RAG_FLOW = "simple"` 可减少模型调用，但会关闭这套自纠错流程。
-- 改为 `LLM_BACKEND = "api"` 只切换文字大模型；图片描述仍由 `VLM_BASE_URL` 指向的 Ollama 服务处理，embedding 由 `EMBEDDING_BACKEND` 单独控制，reranker 仍在本地运行。切换配置后重启后端。
+- 改为 `LLM_BACKEND = "api"` 只切换文字大模型；图片描述由独立的 `VLM_BACKEND` 控制（默认豆包 API），embedding 由 `EMBEDDING_BACKEND` 单独控制，reranker 仍在本地运行。切换配置后重启后端。
 
 未来可以继续优化：
 

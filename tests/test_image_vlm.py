@@ -107,6 +107,10 @@ class TestBuildImageChunk:
 
 
 class TestVlmCaptioner:
+    @pytest.fixture(autouse=True)
+    def local_backend(self, monkeypatch):
+        monkeypatch.setattr(vlm_captioner, "VLM_BACKEND", "ollama")
+
     def test_caption_image_calls_ollama_chat(self, tmp_path, monkeypatch):
         img = tmp_path / "fig.png"
         img.write_bytes(_png_bytes())
@@ -196,3 +200,89 @@ class TestVlmCaptioner:
         results = caption_images(images, "lecture.pdf")
 
         assert results == []
+
+
+class TestApiVlm:
+    @pytest.fixture(autouse=True)
+    def api_backend(self, monkeypatch):
+        monkeypatch.setattr(vlm_captioner, "VLM_BACKEND", "api")
+        monkeypatch.setenv("ZHI_API_KEY", "test-secret")
+        monkeypatch.setenv("ZHI_BASE_URL", "https://example.com/v1/")
+
+    def test_api_sends_image_and_reuses_existing_key(self, tmp_path, monkeypatch):
+        image = tmp_path / "fig.png"
+        image.write_bytes(_png_bytes())
+        captured = {}
+
+        def post(url, **kwargs):
+            captured.update(url=url, **kwargs)
+
+            class Response:
+                status_code = 200
+
+                def json(self):
+                    return {"choices": [{"message": {"content": "  上升趋势  "},
+                                         "finish_reason": "stop"}]}
+
+            return Response()
+
+        monkeypatch.setattr(vlm_captioner.requests, "post", post)
+        assert caption_image(str(image)) == "上升趋势"
+        assert captured["url"] == "https://example.com/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer test-secret"
+        payload = captured["json"]
+        assert payload["model"] == vlm_captioner.VLM_API_MODEL
+        assert payload["thinking"] == {"type": "disabled"}
+        assert payload["max_tokens"] == vlm_captioner.VLM_MAX_TOKENS
+        content = payload["messages"][0]["content"]
+        assert content[0]["text"] == vlm_captioner.CAPTION_PROMPT
+        uri = content[1]["image_url"]["url"]
+        assert uri.startswith("data:image/png;base64,")
+        assert base64.b64decode(uri.split(",", 1)[1]) == image.read_bytes()
+
+    def test_missing_key_stops_batch_without_network(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("ZHI_API_KEY")
+        monkeypatch.setattr(vlm_captioner.requests, "post",
+                            lambda *a, **kw: pytest.fail("must not request without a key"))
+        images = [{"page": 1, "image_path": "unused.png"}] * 2
+        assert caption_images(images, "lecture.pdf") == []
+        assert "ZHI_API_KEY" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
+    def test_service_failure_stops_batch_and_hides_response(self, tmp_path, monkeypatch, capsys, status):
+        image = tmp_path / "fig.png"
+        image.write_bytes(_png_bytes())
+        calls = []
+
+        def post(*args, **kwargs):
+            calls.append(1)
+            return type("Response", (), {"status_code": status, "text": "test-secret"})()
+
+        monkeypatch.setattr(vlm_captioner.requests, "post", post)
+        assert caption_images([{"page": 1, "image_path": str(image)}] * 2, "lecture.pdf") == []
+        assert len(calls) == 1
+        output = capsys.readouterr().out
+        assert f"HTTP {status}" in output
+        assert "test-secret" not in output
+
+    @pytest.mark.parametrize("choices", [[], [{"message": {"content": ""}}],
+        [{"message": {"content": "incomplete"}, "finish_reason": "length"}]])
+    def test_invalid_or_truncated_reply_is_not_indexed(self, tmp_path, monkeypatch, choices):
+        image = tmp_path / "fig.png"
+        image.write_bytes(_png_bytes())
+        response = type("Response", (), {"status_code": 200,
+                        "json": lambda self: {"choices": choices}})()
+        monkeypatch.setattr(vlm_captioner.requests, "post", lambda *a, **kw: response)
+        with pytest.raises(vlm_captioner.VlmServiceError):
+            caption_image(str(image))
+
+    def test_caption_fingerprint_tracks_model_prompt_and_not_key(self, monkeypatch):
+        initial = vlm_captioner.caption_fingerprint()
+        monkeypatch.setenv("ZHI_API_KEY", "another-secret")
+        assert vlm_captioner.caption_fingerprint() == initial
+        monkeypatch.setattr(vlm_captioner, "VLM_API_MODEL", "other-model")
+        assert vlm_captioner.caption_fingerprint() != initial
+        monkeypatch.setattr(vlm_captioner, "VLM_API_MODEL", "original")
+        previous = vlm_captioner.caption_fingerprint()
+        monkeypatch.setattr(vlm_captioner, "CAPTION_PROMPT", "new prompt")
+        assert vlm_captioner.caption_fingerprint() != previous
