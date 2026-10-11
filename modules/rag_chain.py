@@ -2,42 +2,9 @@ from typing import List, Dict
 from pathlib import Path
 
 from config import VECTOR_TOP_K, BM25_TOP_K, FINAL_TOP_K
-from config import CHAT_MODEL
-from config import LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT
-import os
-import requests
-
-from openai import OpenAI
-from dotenv import load_dotenv
 
 from modules.reranker import rerank_chunks
-
-# 加载环境变量
-load_dotenv()
-
-# OpenAI 兼容客户端懒加载。
-# 旧版在 import 时直接创建客户端，未配置 .env 会导致整个服务无法启动，
-# 而使用 Ollama 后端时根本不需要它。改为首次调用 API 后端时再创建。
-_api_client: OpenAI | None = None
-
-
-def _get_api_client() -> OpenAI:
-    """
-    懒加载 OpenAI-compatible 客户端（仅 api backend 使用）。
-    """
-    global _api_client
-
-    if _api_client is None:
-        api_key = os.getenv("ZHI_API_KEY")
-        if not api_key:
-            raise RuntimeError("未配置 ZHI_API_KEY，无法使用 API LLM 后端")
-
-        _api_client = OpenAI(
-            api_key=api_key,
-            base_url=os.getenv("ZHI_BASE_URL"),
-        )
-
-    return _api_client
+from modules.llm_backends import invoke_llm
 
 
 def build_context(retrieved_chunks: List[Dict]) -> str:
@@ -95,88 +62,6 @@ def build_reference_text(retrieved_chunks: List[Dict]) -> str:
     return "\n".join(reference_lines)
 
 
-def call_api_llm(prompt: str) -> str:
-    """
-    调用在线 OpenAI-compatible 聊天模型。
-    """
-    response = _get_api_client().chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": "你是一个课程资料问答助手，擅长根据给定资料回答问题。"},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.2
-    )
-
-    return response.choices[0].message.content
-
-
-def call_ollama_llm(prompt: str) -> str:
-    """
-    调用本地 Ollama 文本生成接口。
-    """
-    # 对当前单轮 RAG 场景，使用 /api/generate 更简单、更稳定
-    url = f"{OLLAMA_BASE_URL}/api/generate"
-
-    # 将 system 指令和用户 prompt 合并成一个完整提示词
-    full_prompt = (
-        "你是一个课程资料问答助手，擅长根据给定资料回答问题。\n\n"
-        f"{prompt}"
-    )
-
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": full_prompt,
-        "stream": False,
-        "options": {
-            # 保持和原在线模型一致的温度参数
-            "temperature": 0.2,
-            # 显式限制上下文窗口，降低本地 7B 模型的压力
-            "num_ctx": 2048
-        }
-    }
-
-    # 向本地 Ollama 发送请求
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=OLLAMA_TIMEOUT
-    )
-
-    # 如果请求失败，这里尽量打印 Ollama 返回的详细错误信息
-    if response.status_code != 200:
-        try:
-            error_detail = response.json()
-        except Exception:
-            error_detail = response.text
-
-        raise RuntimeError(
-            f"Ollama 调用失败，status_code={response.status_code}，detail={error_detail}"
-        )
-
-    # 解析 Ollama 返回的 JSON 结果
-    data = response.json()
-
-    # /api/generate 的回答正文在 response 字段中
-    return data["response"]
-
-
-def call_llm(prompt: str) -> str:
-    """
-    根据配置选择不同的 LLM backend。
-    """
-    # 如果配置为 ollama，则调用本地模型
-    if LLM_BACKEND == "ollama":
-        return call_ollama_llm(prompt)
-
-    # 如果配置为 api，则调用在线模型
-    if LLM_BACKEND == "api":
-        return call_api_llm(prompt)
-
-    # 其他非法配置，直接报错
-    raise ValueError(f"不支持的 LLM_BACKEND: {LLM_BACKEND}")
-
-
 def generate_answer(query: str, retriever, top_k: int = 3) -> Dict:
     """
     完整 RAG 流程：
@@ -226,8 +111,8 @@ def generate_answer(query: str, retriever, top_k: int = 3) -> Dict:
 4. 在回答最后给出参考来源，按“文件名：第x页、第y页”的格式展示。
 """
 
-    # 调用聊天模型生成最终答案
-    answer = call_llm(prompt)
+    # 通过 LCEL 链调用聊天模型生成最终答案
+    answer = invoke_llm(prompt)
 
     # 生成参考来源文本
     reference_text = build_reference_text(retrieved_chunks)

@@ -28,7 +28,11 @@ from modules.doc_registry import (
     get_document,
     register_documents,
 )
-from modules.pdf_loader import load_pdf
+from modules.document_loader import (
+    SUPPORTED_EXTENSIONS,
+    is_supported,
+    load_document,
+)
 from modules.text_splitter import split_text
 from modules.data_cleaner import filter_pages
 from modules.embeddings import embed_chunks
@@ -46,8 +50,8 @@ from modules.rag_chain import generate_answer
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Course RAG API",
-    description="课程 PDF 智能问答系统 API",
-    version="1.0.0"
+    description="课程资料智能问答系统 API",
+    version="1.1.0"
 )
 
 
@@ -69,8 +73,17 @@ class ChatRequest(BaseModel):
     # 用户问题
     question: str = Field(..., description="用户输入的问题")
 
-    # 要使用的 PDF 文件名列表（文件需已存在于 data 目录中）
-    pdf_names: List[str] = Field(..., description="参与问答的 PDF 文件名列表")
+    # 要使用的文档文件名列表（文件需已存在于 data 目录中）
+    doc_names: List[str] | None = Field(
+        default=None,
+        description="参与问答的文档文件名列表",
+    )
+
+    # 旧字段，保留兼容：老版本前端仍会传 pdf_names
+    pdf_names: List[str] | None = Field(
+        default=None,
+        description="已废弃，请使用 doc_names",
+    )
 
     # 最终送入大模型的片段数量
     top_k: int = Field(default=RERANK_TOP_K, description="最终召回片段数量")
@@ -151,14 +164,14 @@ def get_kb_storage_paths(kb_id: str) -> tuple[str, str]:
     return index_path, metadata_path
 
 
-def _build_faiss_pipeline(pdf_paths: List[str]):
+def _build_faiss_pipeline(doc_paths: List[str]):
     """
     Legacy full-selection FAISS pipeline, retained as a fallback backend.
     """
-    register_documents(pdf_paths)
+    register_documents(doc_paths)
 
     kb_id = compute_kb_id(
-        pdf_paths,
+        doc_paths,
         embedding_backend=EMBEDDING_BACKEND,
         embedding_model=get_current_embedding_model(),
         index_schema_version=_pipeline_fingerprint(),
@@ -172,8 +185,8 @@ def _build_faiss_pipeline(pdf_paths: List[str]):
         all_chunks = []
         next_chunk_id = 0
 
-        for pdf_path in sorted(pdf_paths, key=lambda p: os.path.basename(p).lower()):
-            pages = filter_pages(load_pdf(pdf_path))
+        for doc_path in sorted(doc_paths, key=lambda p: os.path.basename(p).lower()):
+            pages = filter_pages(load_document(doc_path))
             chunks = split_text(
                 pages,
                 chunk_size=CHUNK_SIZE,
@@ -191,7 +204,7 @@ def _build_faiss_pipeline(pdf_paths: List[str]):
     return index, metadata, kb_id, _cache_retriever(kb_id, index, metadata)
 
 
-def _build_chroma_pipeline(pdf_paths: List[str]):
+def _build_chroma_pipeline(doc_paths: List[str]):
     """
     Build or update a persistent Chroma index incrementally.
 
@@ -199,7 +212,7 @@ def _build_chroma_pipeline(pdf_paths: List[str]):
     file first has its old hash deleted, then only that file is re-parsed and
     re-embedded. Queries and BM25 are limited to the current file selection.
     """
-    sorted_paths = sorted(pdf_paths, key=lambda p: os.path.basename(p).lower())
+    sorted_paths = sorted(doc_paths, key=lambda p: os.path.basename(p).lower())
     current_records = {
         os.path.basename(path): {
             "path": path,
@@ -225,7 +238,7 @@ def _build_chroma_pipeline(pdf_paths: List[str]):
         if store.has_document(current["sha256"], source):
             continue
 
-        pages = filter_pages(load_pdf(current["path"]))
+        pages = filter_pages(load_document(current["path"]))
         chunks = split_text(
             pages,
             chunk_size=CHUNK_SIZE,
@@ -245,7 +258,7 @@ def _build_chroma_pipeline(pdf_paths: List[str]):
     doc_hashes = [record["sha256"] for record in current_records.values()]
     metadata = store.get_documents(doc_hashes)
     if not metadata:
-        raise RuntimeError("Chroma 知识库为空，请检查 PDF 是否包含可解析文本")
+        raise RuntimeError("Chroma 知识库为空，请检查文档是否包含可解析文本")
 
     selection_id = compute_kb_id(
         sorted_paths,
@@ -259,15 +272,15 @@ def _build_chroma_pipeline(pdf_paths: List[str]):
     return index, metadata, selection_id, _cache_retriever(selection_id, index, metadata)
 
 
-def build_rag_pipeline(pdf_paths: List[str]):
+def build_rag_pipeline(doc_paths: List[str]):
     """
     Build the retrieval backend configured by VECTOR_STORE_BACKEND.
     """
     if VECTOR_STORE_BACKEND == "chroma":
-        return _build_chroma_pipeline(pdf_paths)
+        return _build_chroma_pipeline(doc_paths)
 
     if VECTOR_STORE_BACKEND == "faiss":
-        return _build_faiss_pipeline(pdf_paths)
+        return _build_faiss_pipeline(doc_paths)
 
     raise ValueError(f"不支持的 VECTOR_STORE_BACKEND: {VECTOR_STORE_BACKEND}")
 
@@ -278,7 +291,7 @@ def build_rag_pipeline(pdf_paths: List[str]):
 @app.post("/chat")
 def chat(request: ChatRequest):
     """
-    根据指定 PDF 文件和问题，返回 RAG 问答结果。
+    根据指定文档文件和问题，返回 RAG 问答结果。
     """
     # 去掉问题首尾空格
     question = request.question.strip()
@@ -287,32 +300,42 @@ def chat(request: ChatRequest):
     if not question:
         raise HTTPException(status_code=400, detail="question 不能为空")
 
-    # 检查 PDF 文件名列表是否为空
-    if not request.pdf_names:
-        raise HTTPException(status_code=400, detail="pdf_names 不能为空")
+    # doc_names 为主字段，pdf_names 仅为旧版前端兼容
+    doc_names = request.doc_names or request.pdf_names
+
+    # 检查文档文件名列表是否为空
+    if not doc_names:
+        raise HTTPException(status_code=400, detail="doc_names 不能为空")
 
     # 将文件名转为 data 目录下的路径
-    pdf_paths = []
-    for pdf_name in request.pdf_names:
-        if Path(pdf_name).name != pdf_name:
+    doc_paths = []
+    for doc_name in doc_names:
+        if Path(doc_name).name != doc_name:
             raise HTTPException(
                 status_code=400,
-                detail="pdf_names 中只能包含文件名，不能包含路径"
+                detail="doc_names 中只能包含文件名，不能包含路径"
             )
 
-        pdf_path = os.path.join("data", pdf_name)
+        if not is_supported(doc_name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件格式: {doc_name}，"
+                       f"当前支持 {', '.join(SUPPORTED_EXTENSIONS)}"
+            )
+
+        doc_path = os.path.join("data", doc_name)
 
         # 检查文件是否存在
-        if not os.path.exists(pdf_path):
+        if not os.path.exists(doc_path):
             raise HTTPException(
                 status_code=404,
-                detail=f"文件不存在: {pdf_name}"
+                detail=f"文件不存在: {doc_name}"
             )
 
-        pdf_paths.append(pdf_path)
+        doc_paths.append(doc_path)
 
     # 构建或加载知识库索引
-    index, metadata, kb_id, retriever = build_rag_pipeline(pdf_paths)
+    index, metadata, kb_id, retriever = build_rag_pipeline(doc_paths)
 
     # 调用 RAG 逻辑生成答案
     result = generate_answer(

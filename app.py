@@ -6,6 +6,7 @@ import requests
 import streamlit as st
 
 from config import RERANK_TOP_K
+from modules.document_loader import SUPPORTED_EXTENSIONS
 
 
 # ==============================
@@ -18,7 +19,7 @@ API_BASE_URL = os.getenv("RAG_API_BASE_URL", "http://127.0.0.1:8000")
 
 # 设置页面基础信息
 st.set_page_config(
-    page_title="课程 PDF 智能问答系统",
+    page_title="课程资料智能问答系统",
     page_icon="📘",
     layout="wide"
 )
@@ -114,9 +115,10 @@ st.markdown(
 st.markdown(
     """
     <div class="hero-card">
-        <h1 style="margin-bottom: 0.4rem;">📘 课程 PDF 智能问答系统</h1>
+        <h1 style="margin-bottom: 0.4rem;">📘 课程资料智能问答系统</h1>
         <div class="small-muted">
-            上传一个或多个课程 PDF，系统会基于 RAG 检索相关内容并生成回答。
+            上传一个或多个课程资料（PDF / Word / PPT / Markdown / TXT），
+            系统会基于 RAG 检索相关内容并生成回答。
         </div>
     </div>
     """,
@@ -188,13 +190,13 @@ def call_health_api() -> bool:
         return False
 
 
-def call_chat_api(question: str, pdf_names: List[str], top_k: int) -> dict:
+def call_chat_api(question: str, doc_names: List[str], top_k: int) -> dict:
     """
     调用 FastAPI 的 /chat 接口，获取 RAG 问答结果。
 
     参数:
         question: 用户问题
-        pdf_names: 参与问答的 PDF 文件名列表
+        doc_names: 参与问答的文档文件名列表
         top_k: 最终召回片段数量
 
     返回:
@@ -203,7 +205,7 @@ def call_chat_api(question: str, pdf_names: List[str], top_k: int) -> dict:
     # 组织请求体，和后端 ChatRequest 保持一致
     payload = {
         "question": question,
-        "pdf_names": pdf_names,
+        "doc_names": doc_names,
         "top_k": top_k
     }
 
@@ -302,10 +304,10 @@ with left_col:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("📂 知识库管理")
 
-    # 上传 PDF 的组件
+    # 上传课程资料的组件（支持 pdf / docx / pptx / md / txt）
     uploaded_files = st.file_uploader(
-        "请上传一个或多个 PDF 文件",
-        type=["pdf"],
+        "请上传一个或多个课程资料文件（PDF / Word / PPT / Markdown / TXT）",
+        type=[ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS],
         accept_multiple_files=True
     )
 
@@ -324,7 +326,7 @@ with left_col:
         # 提示当前系统改为通过 FastAPI 处理问答
         st.info("提问时会将文件保存到本地 data 目录，并由 FastAPI 后端完成建库与问答。")
     else:
-        st.info("请先上传至少一个 PDF 文件。")
+        st.info("请先上传至少一个课程资料文件。")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -390,9 +392,9 @@ with right_col:
     # 当用户点击“开始提问”时，进入主流程
     # -----------------------------
     if ask_button:
-        # 如果还没上传 PDF，则提示用户先上传
+        # 如果还没上传文件，则提示用户先上传
         if not uploaded_files:
-            st.warning("请先上传 PDF 文件。")
+            st.warning("请先上传课程资料文件。")
 
         # 如果问题为空，则提示用户输入问题
         elif not question.strip():
@@ -406,18 +408,18 @@ with right_col:
             try:
                 # 用 status 展示当前处理进度
                 with st.status("正在处理你的问题...", expanded=True) as status:
-                    # 第 1 步：将上传的 PDF 保存到本地 data 目录
-                    st.write("1/3 正在保存上传的 PDF 文件...")
-                    pdf_paths = [save_uploaded_file(uploaded_file) for uploaded_file in uploaded_files]
+                    # 第 1 步：将上传的文件保存到本地 data 目录
+                    st.write("1/3 正在保存上传的文件...")
+                    doc_paths = [save_uploaded_file(uploaded_file) for uploaded_file in uploaded_files]
 
                     # 从路径中提取文件名，传给后端接口
-                    pdf_names = [os.path.basename(path) for path in pdf_paths]
+                    doc_names = [os.path.basename(path) for path in doc_paths]
 
                     # 第 2 步：调用 FastAPI 后端接口
                     st.write("2/3 正在调用 FastAPI 问答接口...")
                     result = call_chat_api(
                         question=question.strip(),
-                        pdf_names=pdf_names,
+                        doc_names=doc_names,
                         top_k=top_k
                     )
 
