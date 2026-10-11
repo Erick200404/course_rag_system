@@ -5,7 +5,7 @@ from typing import List
 import requests
 import streamlit as st
 
-from config import MAX_HISTORY_TURNS, RERANK_TOP_K
+from config import MAX_HISTORY_TURNS, RERANK_TOP_K, RAG_FLOW
 from modules.document_loader import SUPPORTED_EXTENSIONS
 
 
@@ -21,108 +21,234 @@ API_BASE_URL = os.getenv("RAG_API_BASE_URL", "http://127.0.0.1:8000")
 st.set_page_config(
     page_title="课程资料智能问答系统",
     page_icon="📘",
-    layout="wide"
+    layout="wide",
 )
 
+
 # -----------------------------
-# 自定义样式：尽量保持你原来的页面风格
+# 自定义样式：Perplexity 风格（羊皮纸底色 + 单一墨绿点缀 + 扁平紧凑）
+# 仅借鉴其视觉语言，布局按本项目逻辑（左侧资料库 + 居中 hero 提问）重组
 # -----------------------------
 st.markdown(
     """
     <style>
-    .main {
-        padding-top: 1.2rem;
+    :root {
+        --parchment: #faf8f5;
+        --soft-paper: #fdfbfa;
+        --rail: #f4f1ec;
+        --warm-mist: #d1d1cd;
+        --ash: #92918b;
+        --graphite: #72706b;
+        --ink: #27251e;
+        --teal: #016a71;
+        --shadow-subtle: rgba(0, 0, 0, 0.08) 0px 1px 2px;
     }
 
+    /* 整体画布：所有全屏背景都用羊皮纸，不用纯白 */
+    html, body, .stApp { background: var(--parchment); }
+    .stApp { color: var(--ink); }
+
+    /* 收起 Streamlit 默认顶部菜单与页脚，降低 chrome */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header[data-testid="stHeader"] { display: none; }
+
+    /* 主内容列：居中、窄栏（贴近 Perplexity 的 900px 限制） */
     .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
+        max-width: 960px !important;
+        margin: 0 auto;
+        padding-top: 2.2rem;
+        padding-bottom: 3rem;
     }
 
-    .hero-card {
-        padding: 1.2rem 1.4rem;
+    /* 左栏：略深的羊皮纸导轨，右侧发丝边 */
+    section[data-testid="stSidebar"] {
+        background: var(--rail);
+        border-right: 1px solid var(--warm-mist);
+    }
+    section[data-testid="stSidebar"] .block-container {
+        max-width: 100% !important;
+        padding: 1.6rem 1.1rem;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 { color: var(--ink); font-weight: 500; }
+
+    /* 文本输入：hero 搜索框 */
+    .stTextInput > div > div > input {
+        background: var(--parchment);
+        border: 1px solid var(--warm-mist);
+        border-radius: 12px;
+        color: var(--ink);
+        padding: 14px 16px;
+        font-size: 16px;
+        line-height: 1.5;
+    }
+    .stTextInput > div > div > input::placeholder { color: var(--graphite); }
+    .stTextInput > div > div > input:focus {
+        border-color: var(--teal);
+        box-shadow: 0 0 0 3px rgba(1, 106, 113, 0.15);
+    }
+    /* hero 输入框的静态墨绿微光（模板允许的唯一点缀效果） */
+    .hero-input .stTextInput > div > div {
+        box-shadow: 0 0 0 4px rgba(1, 106, 113, 0.08);
+        border-radius: 12px;
+    }
+
+    /* 按钮：默认 ghost（石墨文字 + 发丝边 + 6px 圆角） */
+    .stButton > button,
+    .stFormSubmitButton > button {
+        background: transparent;
+        color: var(--graphite);
+        border: 1px solid var(--warm-mist);
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 14px;
+        padding: 8px 14px;
+        transition: color .15s, border-color .15s;
+    }
+    .stButton > button:hover,
+    .stFormSubmitButton > button:hover {
+        color: var(--ink);
+        border-color: var(--graphite);
+    }
+
+    /* 主操作按钮：墨色填充（hero 提交） */
+    .primary-btn button {
+        background: var(--ink) !important;
+        color: var(--parchment) !important;
+        border: none !important;
+        border-radius: 12px !important;
+        font-size: 15px !important;
+        padding: 10px 22px !important;
+    }
+    .primary-btn button:hover { background: #1b1913 !important; color: var(--parchment) !important; }
+
+    /* 示例问题 / 资料芯片：pill（9999px 圆角） */
+    .pill-row button {
+        border-radius: 9999px !important;
+        border: 1px solid var(--warm-mist) !important;
+        background: transparent !important;
+        color: var(--ink) !important;
+        font-size: 14px !important;
+        text-align: left !important;
+    }
+    .pill-row button:hover { border-color: var(--teal) !important; color: var(--teal) !important; }
+
+    /* 卡片：柔纸表面 + 16px 圆角 + 发丝边（扁平，不用重阴影） */
+    .card {
+        background: var(--soft-paper);
+        border: 1px solid var(--warm-mist);
         border-radius: 16px;
-        background: linear-gradient(135deg, #eef4ff 0%, #f8fbff 100%);
-        border: 1px solid #dbe7ff;
-        margin-bottom: 1rem;
+        padding: 16px;
     }
 
-    .section-card {
-        padding: 1rem 1rem 0.8rem 1rem;
-        border-radius: 14px;
-        border: 1px solid #e9eef5;
-        background: #ffffff;
-        margin-bottom: 1rem;
-    }
-
+    /* 答案卡片 */
     .answer-card {
-        padding: 1rem 1.2rem;
-        border-radius: 14px;
-        border-left: 6px solid #4f8bf9;
-        background: #f7fbff;
+        background: var(--soft-paper);
+        border: 1px solid var(--warm-mist);
+        border-radius: 16px;
+        padding: 18px 20px;
         margin-top: 0.5rem;
         margin-bottom: 1rem;
+        line-height: 1.6;
     }
+    .answer-card p { margin: 0 0 0.6rem 0; }
 
-    .small-muted {
-        color: #6b7280;
-        font-size: 0.92rem;
-    }
-
-    .file-tag {
-        display: inline-block;
-        padding: 0.25rem 0.65rem;
-        margin: 0.2rem 0.25rem 0.2rem 0;
-        border-radius: 999px;
-        background: #f3f6fb;
-        border: 1px solid #dbe4f0;
-        font-size: 0.9rem;
-    }
-
-    .metric-box {
-        padding: 0.8rem 1rem;
-        border-radius: 12px;
-        background: #fafbfc;
-        border: 1px solid #eef2f7;
-        text-align: center;
-    }
-
+    /* 历史问答气泡 */
     .history-question {
-        padding: 0.8rem 1rem;
+        padding: 10px 14px;
         border-radius: 12px;
-        background: #f6f7fb;
-        border: 1px solid #e6eaf2;
-        margin-bottom: 0.5rem;
+        background: var(--parchment);
+        border: 1px solid var(--warm-mist);
+        margin-bottom: 0.4rem;
+        color: var(--ink);
     }
-
     .history-answer {
-        padding: 0.8rem 1rem;
+        padding: 10px 14px;
         border-radius: 12px;
-        background: #f8fbff;
-        border: 1px solid #dbe7ff;
+        background: var(--soft-paper);
+        border: 1px solid var(--warm-mist);
         margin-bottom: 1rem;
+        color: var(--ink);
+        line-height: 1.6;
     }
 
-    .stButton > button {
-        border-radius: 10px;
+    /* 区块小标题（替代 emoji 标题，保持克制） */
+    .section-label {
+        color: var(--graphite);
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: .04em;
+        margin: 0 0 0.6rem 0;
     }
+
+    /* 资料条目（侧栏「资料库」） */
+    .doc-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--warm-mist);
+        background: var(--parchment);
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--ink);
+    }
+    .doc-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-item .size { color: var(--ash); font-size: 11px; }
+
+    /* 资料芯片（hero 下方：本次将基于哪些资料） */
+    .doc-chip {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--warm-mist);
+        border-radius: 9999px;
+        padding: 4px 10px;
+        margin: 3px 4px 3px 0;
+        font-size: 12px;
+        color: var(--ink);
+        background: var(--soft-paper);
+    }
+
+    /* 状态点 */
+    .status-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--graphite); }
+    .status-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+
+    /* 墨绿徽标（NEW / 编排模式） */
+    .badge-teal {
+        display: inline-block;
+        background: var(--teal);
+        color: #fff;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 8px;
+    }
+
+    /* 文案层级 */
+    .muted { color: var(--graphite); font-size: 13px; }
+    .caption-teal { color: var(--teal); font-size: 12px; }
+    .caption-warn { color: #b4543f; font-size: 12px; }
+
+    /* 折叠面板：羊皮纸风格 */
+    .streamlit-expanderHeader {
+        background: var(--soft-paper) !important;
+        border: 1px solid var(--warm-mist) !important;
+        border-radius: 12px !important;
+        color: var(--ink) !important;
+        font-size: 13px !important;
+    }
+
+    /* 分隔线：发丝灰 */
+    hr { border: none; border-top: 1px solid var(--warm-mist); margin: 1rem 0; }
+
+    /* 隐藏 sidebar 内部多余留白导致的滚动条影响 */
+    section[data-testid="stSidebar"] .stFileUploader { margin-bottom: 0.5rem; }
     </style>
     """,
-    unsafe_allow_html=True
-)
-
-# 页面标题
-st.markdown(
-    """
-    <div class="hero-card">
-        <h1 style="margin-bottom: 0.4rem;">📘 课程资料智能问答系统</h1>
-        <div class="small-muted">
-            上传一个或多个课程资料（PDF / Word / PPT / Markdown / TXT），
-            系统会基于 RAG 检索相关内容并生成回答。
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -142,7 +268,7 @@ if "latest_result" not in st.session_state:
 
 def save_uploaded_file(uploaded_file, save_dir: str = "data") -> str:
     """
-    保存用户上传的 PDF 文件到本地 data 目录。
+    保存用户上传的资料文件到本地 data 目录。
 
     参数:
         uploaded_file: Streamlit 上传的文件对象
@@ -224,7 +350,7 @@ def call_chat_api(
         response = requests.post(
             f"{API_BASE_URL}/chat",
             json=payload,
-            timeout=120
+            timeout=120,
         )
 
         # 如果后端返回非 200，抛出异常并带上返回内容
@@ -251,7 +377,6 @@ def render_score(item: dict):
     """
     统一显示不同检索阶段可能出现的分数字段。
     """
-    # 兼容不同检索阶段产生的分数显示
     if "rerank_score" in item:
         st.write(f"**Reranker 分数**：{item['rerank_score']:.4f}")
     elif "score" in item:
@@ -261,289 +386,286 @@ def render_score(item: dict):
 
 
 def set_example_question(text: str):
-    """
-    设置示例问题到输入框。
-    """
+    """设置示例问题到输入框。"""
     st.session_state.question_input = text
 
 
-# -----------------------------
-# 侧边栏：系统配置区
-# -----------------------------
+def render_status_chip(ok: bool):
+    """用墨绿/克制的红点展示后端在线状态。"""
+    color = "#016a71" if ok else "#b4543f"
+    label = "后端在线" if ok else "后端离线"
+    st.markdown(
+        f'<span class="status-chip"><span class="dot" style="--c:{color}"></span>{label}</span>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# 左侧栏：资料库 + 设置（突出展示「传进去的资料」）
+# ============================================================
 with st.sidebar:
-    st.header("⚙️ 参数配置")
+    # 品牌锚点
+    st.markdown(
+        """
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="font-size:18px;">📘</span>
+            <span style="font-size:16px;font-weight:500;color:var(--ink);">课程问答</span>
+        </div>
+        <div class="muted" style="margin-bottom:1rem;">RAG 智能问答 · 资料检索与复习</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # 是否显示召回片段，便于用户按需查看证据
+    # 编排模式徽标（体现当前 RAG_FLOW）
+    st.markdown(
+        f'<div style="margin-bottom:1rem;"><span class="badge-teal">编排模式：{RAG_FLOW.upper()}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    # —— 资料库 ——
+    st.markdown('<div class="section-label">我的资料库</div>', unsafe_allow_html=True)
+
+    uploaded_files = st.file_uploader(
+        "上传课程资料",
+        type=[ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS],
+        accept_multiple_files=True,
+        help="支持 PDF / Word / PPT / Markdown / TXT，可一次上传多个",
+    )
+
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            size_kb = len(uploaded_file.getvalue()) / 1024
+            name = uploaded_file.name
+            st.markdown(
+                f'<div class="doc-item"><span>📄</span>'
+                f'<span class="name" title="{name}">{name}</span>'
+                f'<span class="size">{size_kb:.0f}KB</span></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<div class="muted" style="margin-top:.4rem;">已载入 {len(uploaded_files)} 份资料，将作为本次问答的知识来源。</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="muted">尚未上传资料。上传后系统会自动建库，即可开始提问。</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # —— 设置 ——
+    st.markdown('<div class="section-label">设置</div>', unsafe_allow_html=True)
+
     show_chunks = st.checkbox("显示召回片段", value=True)
-
-    # 是否显示会话历史
     show_history = st.checkbox("显示历史问答", value=True)
 
-    # 允许用户临时指定展示用的 top_k
     top_k = st.slider(
         "召回片段数量（Top-K）",
         min_value=1,
         max_value=10,
-        value=min(RERANK_TOP_K, 10)
+        value=min(RERANK_TOP_K, 10),
     )
 
-    st.markdown("---")
-    st.caption("提示：这里的 Top-K 会传给 FastAPI 后端接口。")
+    st.markdown("<hr>", unsafe_allow_html=True)
 
-    # 显示后端服务状态，方便调试
+    # 后端在线状态
     backend_ok = call_health_api()
-    if backend_ok:
-        st.success("FastAPI 后端服务正常")
-    else:
-        st.error("FastAPI 后端不可用，请先启动 api/main.py")
+    render_status_chip(backend_ok)
+    if not backend_ok:
+        st.markdown(
+            '<div class="caption-warn" style="margin-top:.4rem;">请先启动后端：uvicorn api.main:app --reload</div>',
+            unsafe_allow_html=True,
+        )
 
-    # 提供一个清空历史按钮，方便用户开始新一轮演示
-    if st.button("🗑️ 清空历史问答", use_container_width=True):
+    if st.button("清空历史问答", use_container_width=True):
         st.session_state.chat_history = []
         st.session_state.latest_result = None
-        st.success("历史问答已清空。")
+        st.rerun()
 
 
-# -----------------------------
-# 主区域布局：左侧知识库区，右侧问答区
-# -----------------------------
-left_col, right_col = st.columns([1, 2], gap="large")
+# ============================================================
+# 主区域：居中 hero 提问 + 示例 + 结果
+# ============================================================
+# 顶部 wordmark（克制，不用大字重）
+st.markdown(
+    """
+    <div style="text-align:center;margin-bottom:1.4rem;">
+        <div style="font-size:22px;font-weight:500;color:var(--ink);">课程资料智能问答</div>
+        <div class="muted" style="margin-top:.3rem;">上传资料，用自然语言提问，基于检索内容生成带引用的回答。</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
+# —— Hero 提问框 ——
+st.markdown('<div class="hero-input">', unsafe_allow_html=True)
+with st.form("qa_form", clear_on_submit=False):
+    question = st.text_input(
+        "question_input",
+        value=st.session_state.question_input,
+        placeholder="例如：请大致告诉我这个课件讲了什么？",
+        label_visibility="collapsed",
+    )
+    st.markdown('<div class="primary-btn">', unsafe_allow_html=True)
+    ask_button = st.form_submit_button("提问", use_container_width=False)
+    st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
-with left_col:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("📂 知识库管理")
+# 同步输入框内容
+st.session_state.question_input = question
 
-    # 上传课程资料的组件（支持 pdf / docx / pptx / md / txt）
-    uploaded_files = st.file_uploader(
-        "请上传一个或多个课程资料文件（PDF / Word / PPT / Markdown / TXT）",
-        type=[ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS],
-        accept_multiple_files=True
+# hero 下方：本次将基于的资料芯片（直观体现「传进去的资料」）
+if uploaded_files:
+    chips = "".join(
+        f'<span class="doc-chip">📄 {uf.name}</span>' for uf in uploaded_files
+    )
+    st.markdown(
+        f'<div class="muted" style="margin:.6rem 0 .2rem;">本次问答将基于以下资料：</div>{chips}',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<div class="muted" style="margin:.6rem 0;">尚未上传资料，先到左侧「我的资料库」上传课件吧。</div>',
+        unsafe_allow_html=True,
     )
 
-    # 如果用户已经上传文件，则给出提示
-    if uploaded_files:
-        st.success(f"已上传 {len(uploaded_files)} 个文件")
+# —— 示例问题：pill 芯片（2 列）——
+st.markdown('<div class="section-label" style="margin-top:1.6rem;">试试这样问</div>', unsafe_allow_html=True)
+st.markdown('<div class="pill-row">', unsafe_allow_html=True)
+ex_col1, ex_col2 = st.columns(2)
+with ex_col1:
+    if st.button("总结这些课件的主要内容", use_container_width=True, key="ex1"):
+        set_example_question("请总结这些课件的主要内容。")
+    if st.button("提炼核心知识点", use_container_width=True, key="ex2"):
+        set_example_question("请提炼这些文档中的核心知识点。")
+with ex_col2:
+    if st.button("文档中提到了哪些模型", use_container_width=True, key="ex3"):
+        set_example_question("文档中一共提到了哪些模型？请分别说明。")
+    if st.button("某个概念出现在第几页", use_container_width=True, key="ex4"):
+        set_example_question("这个概念主要出现在第几页？请给出对应依据。")
+st.markdown("</div>", unsafe_allow_html=True)
 
-        # 将已上传文件显示成更清晰的标签形式
-        for uploaded_file in uploaded_files:
-            file_size_kb = len(uploaded_file.getvalue()) / 1024
+
+# -----------------------------
+# 主流程：提交后调用后端并展示结果
+# -----------------------------
+if ask_button:
+    if not uploaded_files:
+        st.warning("请先上传课程资料文件。")
+    elif not question.strip():
+        st.warning("请输入你的问题。")
+    elif not backend_ok:
+        st.error("FastAPI 后端不可用，请先运行：uvicorn api.main:app --reload")
+    else:
+        try:
+            with st.status("正在处理你的问题...", expanded=True) as status:
+                status.write("1/3 正在保存上传的文件...")
+                doc_paths = [save_uploaded_file(uploaded_file) for uploaded_file in uploaded_files]
+                doc_names = [os.path.basename(path) for path in doc_paths]
+
+                status.write("2/3 正在调用 FastAPI 问答接口...")
+                result = call_chat_api(
+                    question=question.strip(),
+                    doc_names=doc_names,
+                    top_k=top_k,
+                    history=st.session_state.chat_history,
+                )
+
+                status.write("3/3 正在更新界面...")
+                st.session_state.latest_result = result
+                st.session_state.chat_history.append(
+                    {
+                        "question": question,
+                        "answer": result["answer"],
+                        "retrieved_chunks": result["retrieved_chunks"],
+                    }
+                )
+                status.update(label="回答生成完成", state="complete", expanded=False)
+        except Exception as e:
+            st.error(f"运行出错：{e}")
+
+
+# -----------------------------
+# 展示最新一次回答结果
+# -----------------------------
+if st.session_state.latest_result is not None:
+    result = st.session_state.latest_result
+
+    st.markdown('<div class="section-label" style="margin-top:1.8rem;">回答</div>', unsafe_allow_html=True)
+    st.markdown('<div class="answer-card">', unsafe_allow_html=True)
+    st.markdown(result["answer"])
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # CRAG 流程信息：改写次数与是否走兜底
+    if result.get("flow") == "crag":
+        if result.get("fallback"):
             st.markdown(
-                f"<div class='file-tag'>📄 {uploaded_file.name}（{file_size_kb:.1f} KB）</div>",
-                unsafe_allow_html=True
+                '<div class="caption-warn">⚠ 检索结果不足以回答，已尝试改写查询后仍走兜底回答。</div>',
+                unsafe_allow_html=True,
+            )
+        elif result.get("retries"):
+            st.markdown(
+                f'<div class="caption-teal">🔁 查询经过 {result["retries"]} 次改写重试后命中相关资料。</div>',
+                unsafe_allow_html=True,
+            )
+        if result.get("question") and result["question"] != result.get(
+            "original_question", result["question"]
+        ):
+            st.markdown(
+                f'<div class="caption-teal">改写后的查询：{result["question"]}</div>',
+                unsafe_allow_html=True,
             )
 
-        # 提示当前系统改为通过 FastAPI 处理问答
-        st.info("提问时会将文件保存到本地 data 目录，并由 FastAPI 后端完成建库与问答。")
-    else:
-        st.info("请先上传至少一个课程资料文件。")
+    # 召回片段预览
+    if show_chunks:
+        st.markdown('<div class="section-label" style="margin-top:1.2rem;">召回片段预览</div>', unsafe_allow_html=True)
+        for i, item in enumerate(result["retrieved_chunks"], start=1):
+            source = item.get("source", "未知来源")
+            page = item.get("page", "未知页码")
+            heading = item.get("heading", "")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+            label = f"片段 {i} · 来源：{source} · 第 {page} 页"
+            if heading:
+                label += f" · {heading}"
 
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("📌 快速提问示例")
+            image_path = item.get("image_path", "")
+            if image_path:
+                label += " · 课件图片"
 
-    # 用多列放几个示例问题按钮，方便快速体验
-    example_col1, example_col2 = st.columns(2)
-
-    with example_col1:
-        if st.button("总结主要内容", use_container_width=True):
-            set_example_question("请总结这些课件的主要内容。")
-
-        if st.button("核心知识点", use_container_width=True):
-            set_example_question("请提炼这些文档中的核心知识点。")
-
-    with example_col2:
-        if st.button("涉及哪些模型", use_container_width=True):
-            set_example_question("文档中一共提到了哪些模型？请分别说明。")
-
-        if st.button("按页定位概念", use_container_width=True):
-            set_example_question("这个概念主要出现在第几页？请给出对应依据。")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # 这里给出一些可视化统计
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("📊 当前状态")
-
-    metric_col1, metric_col2 = st.columns(2)
-
-    with metric_col1:
-        st.metric("已上传文件数", len(uploaded_files) if uploaded_files else 0)
-
-    with metric_col2:
-        st.metric("当前 Top-K", top_k)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+            with st.expander(label):
+                render_score(item)
+                st.write(item.get("text", ""))
+                if image_path and os.path.exists(image_path):
+                    st.image(image_path)
 
 
-with right_col:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("💬 智能问答")
+# -----------------------------
+# 历史问答
+# -----------------------------
+if show_history and st.session_state.chat_history:
+    st.markdown('<div class="section-label" style="margin-top:1.8rem;">历史问答</div>', unsafe_allow_html=True)
 
-    # 使用 form 让输入和提交更像一个完整表单
-    with st.form("qa_form", clear_on_submit=False):
-        # 输入问题
-        question = st.text_input(
-            "请输入你的问题：",
-            value=st.session_state.question_input,
-            placeholder="例如：请大致告诉我这个课件讲了什么？"
-        )
-
-        # 提问按钮
-        ask_button = st.form_submit_button("开始提问", use_container_width=True)
-
-    # 每次 form 提交后，把输入框内容同步回 session_state
-    st.session_state.question_input = question
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # -----------------------------
-    # 当用户点击“开始提问”时，进入主流程
-    # -----------------------------
-    if ask_button:
-        # 如果还没上传文件，则提示用户先上传
-        if not uploaded_files:
-            st.warning("请先上传课程资料文件。")
-
-        # 如果问题为空，则提示用户输入问题
-        elif not question.strip():
-            st.warning("请输入你的问题。")
-
-        # 如果后端服务不可用，则提示先启动 FastAPI
-        elif not backend_ok:
-            st.error("FastAPI 后端不可用，请先运行：uvicorn api.main:app --reload")
-
-        else:
-            try:
-                # 用 status 展示当前处理进度
-                with st.status("正在处理你的问题...", expanded=True) as status:
-                    # 第 1 步：将上传的文件保存到本地 data 目录
-                    st.write("1/3 正在保存上传的文件...")
-                    doc_paths = [save_uploaded_file(uploaded_file) for uploaded_file in uploaded_files]
-
-                    # 从路径中提取文件名，传给后端接口
-                    doc_names = [os.path.basename(path) for path in doc_paths]
-
-                    # 第 2 步：调用 FastAPI 后端接口
-                    st.write("2/3 正在调用 FastAPI 问答接口...")
-                    result = call_chat_api(
-                        question=question.strip(),
-                        doc_names=doc_names,
-                        top_k=top_k,
-                        history=st.session_state.chat_history,
-                    )
-
-                    # 第 3 步：保存结果到会话状态，便于展示历史
-                    st.write("3/3 正在更新界面...")
-                    st.session_state.latest_result = result
-
-                    st.session_state.chat_history.append(
-                        {
-                            "question": question,
-                            "answer": result["answer"],
-                            "retrieved_chunks": result["retrieved_chunks"],
-                        }
-                    )
-
-                    status.update(label="回答生成完成", state="complete", expanded=False)
-
-            except Exception as e:
-                # 如果运行出错，则在页面上显示错误信息
-                st.error(f"运行出错：{e}")
-
-    # -----------------------------
-    # 显示最新一次回答结果
-    # -----------------------------
-    if st.session_state.latest_result is not None:
-        result = st.session_state.latest_result
-
-        st.subheader("✅ 回答结果")
+    for i, record in enumerate(reversed(st.session_state.chat_history), start=1):
         st.markdown(
             f"""
-            <div class="answer-card">
-                {result["answer"]}
-            </div>
+            <div class="history-question"><strong>问题 {i}</strong><br>{record["question"]}</div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"""
+            <div class="history-answer">{record["answer"]}</div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        # CRAG 流程信息：改写次数与是否走兜底
-        if result.get("flow") == "crag":
-            if result.get("fallback"):
-                st.caption("⚠️ 检索结果不足以回答，已尝试改写查询后仍走兜底回答")
-            elif result.get("retries"):
-                st.caption(
-                    f"🔁 查询经过 {result['retries']} 次改写重试后命中相关资料"
-                )
-            # 改写后的查询与用户输入不同时展示，便于观察改写效果
-            if result.get("question") and result["question"] != result.get(
-                "original_question", result["question"]
-            ):
-                st.caption(f"改写后的查询：{result['question']}")
-
-        # 显示召回到的片段，便于调试和观察检索效果
         if show_chunks:
-            st.subheader("📎 召回片段预览")
-            for i, item in enumerate(result["retrieved_chunks"], start=1):
-                source = item.get("source", "未知来源")
-                page = item.get("page", "未知页码")
-                heading = item.get("heading", "")
-
-                # 有章节路径时附加展示，方便定位知识点
-                label = f"片段 {i} | 来源：{source} | 第 {page} 页"
-                if heading:
-                    label += f" | {heading}"
-
-                # 图片 chunk 额外标注
-                image_path = item.get("image_path", "")
-                if image_path:
-                    label += " | 🖼️ 课件图片"
-
-                with st.expander(label):
+            with st.expander(f"查看这轮问答的召回依据（共 {len(record['retrieved_chunks'])} 条）"):
+                for j, item in enumerate(record["retrieved_chunks"], start=1):
+                    source = item.get("source", "未知来源")
+                    page = item.get("page", "未知页码")
+                    st.markdown(f"**片段 {j} · 来源：{source} · 第 {page} 页**")
                     render_score(item)
                     st.write(item.get("text", ""))
-
-                    # 图片描述 chunk 直接展示原图
-                    if image_path and os.path.exists(image_path):
-                        st.image(image_path)
-
-    # -----------------------------
-    # 显示历史问答
-    # -----------------------------
-    if show_history and st.session_state.chat_history:
-        st.subheader("🕘 历史问答")
-
-        # 倒序显示，让最新的问题排在最前面
-        for i, record in enumerate(reversed(st.session_state.chat_history), start=1):
-            st.markdown(
-                f"""
-                <div class="history-question">
-                    <strong>用户问题 {i}</strong><br>
-                    {record["question"]}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            st.markdown(
-                f"""
-                <div class="history-answer">
-                    <strong>系统回答</strong><br>
-                    {record["answer"]}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            # 历史问答中的证据片段也可以展开查看
-            if show_chunks:
-                with st.expander(f"查看这轮问答的召回依据（共 {len(record['retrieved_chunks'])} 条）"):
-                    for j, item in enumerate(record["retrieved_chunks"], start=1):
-                        source = item.get("source", "未知来源")
-                        page = item.get("page", "未知页码")
-
-                        st.markdown(f"**片段 {j} | 来源：{source} | 第 {page} 页**")
-                        render_score(item)
-                        st.write(item.get("text", ""))
-                        st.markdown("---")
+                    st.markdown("---")
