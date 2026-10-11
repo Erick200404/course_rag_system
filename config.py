@@ -13,6 +13,22 @@ import os
 # "text"     -> 纯文本逐页提取（旧行为，兜底方案）
 PDF_PARSE_BACKEND = "markdown"
 
+# ==============================
+# 扫描页 OCR
+# ==============================
+
+# 是否启用扫描页 OCR 路由（检测到扫描页时自动走 OCR 提取文本）
+OCR_ENABLED = True
+
+# OCR 后端：
+# "rapidocr" -> RapidOCR（ONNXRuntime，纯 pip 安装，CPU 也能跑，中文效果好）
+# "none"     -> 不做 OCR，扫描页直接跳过（旧行为）
+OCR_BACKEND = "rapidocr"
+
+# 扫描页判定阈值：页面文本密度（字符数 / 页面面积[平方英寸]）低于该值视为扫描页。
+# 典型参考：A4 满页文本约 3~6，扫描页（无文字层）约 0。
+SCAN_TEXT_DENSITY_THRESHOLD = 0.1
+
 # 索引结构版本。检索算法或 metadata 结构变化时更新该值，
 # 避免旧 FAISS 索引被新代码误加载。
 INDEX_SCHEMA_VERSION = "faiss-cosine-v2"

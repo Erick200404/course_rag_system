@@ -115,6 +115,8 @@ course_rag_system
 │   └─ main.py            # FastAPI 服务接口
 │
 ├─ modules
+│   ├─ document_loader.py # 多格式接入（pdf/docx/pptx/md/txt）
+│   ├─ llm_backends.py    # LangChain LCEL 生成链
 │   ├─ pdf_loader.py      # PDF 解析（markdown / text 双后端）
 │   ├─ data_cleaner.py    # 噪声页过滤
 │   ├─ text_splitter.py   # 标题层级感知切分 + 三级兜底
@@ -392,6 +394,38 @@ LLM Backend
 - [x] 上传与 API 入参增加文件名路径校验，拒绝路径穿越
 - [x] 单元测试扩展至 44 个用例
 
+# v3.4.0 扫描页 OCR 路由
+
+- [x] 新增 `modules/ocr_router.py`：扫描页自动检测与 OCR 提取
+      - 检测：按「文本密度 = 字符数 / 页面面积（平方英寸）」判定，正常文本页约 1~6，扫描页接近 0
+      - 路由：`text` 后端检测到扫描页时整册走 OCR；`markdown` 后端对空文本页按页码对齐补齐
+      - 后端可插拔：默认 **RapidOCR**（ONNXRuntime，纯 pip，CPU 可跑）；`OCR_BACKEND="none"` 退回旧行为
+      - 引擎懒加载，未启用时不下载模型；OCR 失败/未安装时降级为文字层提取，不中断解析
+- [x] 配置项：`OCR_ENABLED` / `OCR_BACKEND` / `SCAN_TEXT_DENSITY_THRESHOLD`（config.py）
+- [x] 单元测试扩展至 82 个用例（新增 OCR 检测/路由/降级/混合页 10 个，OCR 引擎用 monkeypatch 伪造）
+- [x] 真实 RapidOCR 冒烟验证：中英文扫描页均可正确识别（首次运行自动下载内置模型）
+
+------
+
+# v3.3.0 多格式接入与 LangChain LCEL 编排
+
+- [x] 新增 `modules/document_loader.py`：统一文档接入层，支持 **PDF / Word(docx) / PPT(pptx) / Markdown / TXT**
+      - PPT 按幻灯片映射为「页」，使引用溯源对课件同样有效
+      - Word 同时提取段落与表格文本
+      - API 请求字段由 `pdf_names` 调整为 `doc_names`（保留旧字段兼容）
+- [x] 新增 `modules/llm_backends.py`：用 **LangChain LCEL** 组装生成链
+      （`ChatPromptTemplate | chat model | StrOutputParser`），替代手写的 OpenAI SDK 与
+      Ollama `requests` 调用，两个后端只差一个 model 对象
+- [x] 技术选型说明：解析层刻意不用 `langchain-community` 的 loader（该包已进入 sunset，
+      导入会打印弃用警告），改用 python-docx / python-pptx 等轻量库；
+      LangChain 用在真正有收益的编排层
+- [x] 单元测试扩展至 72 个用例（新增文档接入 10 个、LCEL 链 8 个）
+
+**注意**：Ollama 后端由原来的 `/api/generate` 改为 LangChain `ChatOllama` 的 `/api/chat`，
+system / user 角色通过 ChatPromptTemplate 正确传递，`temperature` 与 `num_ctx` 参数保持不变。
+
+------
+
 # v3.2.0 Chroma 向量数据库化
 
 把向量存储从「FAISS + pickle 整库重建」升级为可持久化、可增量维护的 Chroma 集合：
@@ -492,6 +526,31 @@ HF 后端：BAAI/bge-small-zh-v1.5
 - 持久化 Chroma 集合，向量 / 文本 / metadata 统一存储（cosine 空间）
 - 按 `(source, doc_hash)` 写入与删除，支持单文档整体替换
 - `get_documents` / `query` 支持按 `doc_hash` 过滤，实现「当前选择的文件」隔离
+
+## document_loader.py
+
+统一文档接入层，把不同格式归一化为 `{page, text, source}`：
+
+| 格式 | 实现 | 「页」的含义 |
+| --- | --- | --- |
+| pdf | pymupdf4llm（自研后端） | PDF 页码 |
+| pptx | python-pptx | 幻灯片序号 |
+| docx | python-docx（段落 + 表格） | 整份文档记为第 1 页 |
+| md / txt | 直接读取 | 整份文档记为第 1 页 |
+
+## llm_backends.py
+
+用 LangChain LCEL 组装生成链：
+
+```
+ChatPromptTemplate  ->  chat model  ->  StrOutputParser
+   (system + human)     (ChatOpenAI / ChatOllama)
+```
+
+两个 LLM 后端只差一个 model 对象，后续要加流式输出、JSON 结构化输出或重试，
+只需替换链中的某个环节。
+
+------
 
 与 vector_store.py 的区别：
 

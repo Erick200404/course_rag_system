@@ -1,0 +1,8 @@
+{
+    // basedpyright / pylance 解释器配置
+    // 指向 conda 环境 course-rag，依赖（chromadb / langchain 等）都装在这里
+    "venvPath": "D:/ErickProgramFiles/miniconda3/envs",
+    "venv": "course-rag",
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "standard"
+}

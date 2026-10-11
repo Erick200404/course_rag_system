@@ -29,4 +29,5 @@ test/
 *.pkl
 
 # pytest 临时目录（沙箱内 --basetemp）
+.tmp_*/
 .tmp_pt*/

@@ -3,6 +3,7 @@ from pathlib import Path
 import fitz
 
 from config import PDF_PARSE_BACKEND
+from modules.ocr_router import extract_pdf_pages_with_ocr, is_scanned_page
 
 
 def _validate_pdf(pdf_path: str) -> Path:
@@ -24,21 +25,27 @@ def _load_pdf_text(pdf_file: Path) -> list[dict]:
     """
     后端一：使用 PyMuPDF（fitz）逐页提取纯文本。
 
-    注意：仅支持文本型 PDF，无法处理扫描版/图片型 PDF；
-    且不保留标题层级、表格等版面结构。
+    扫描页（无文字层）会自动路由到 OCR（见 modules/ocr_router.py）；
+    OCR 未启用时退回文字层提取，扫描页文本为空由 data_cleaner 过滤。
 
     Returns:
         一个列表，每个元素都是一页的数据：
         {
             "page": 页码,
             "text": 页面文本,
-            "source": 文件名
+            "source": 文件名,
+            "ocr": 是否经过 OCR（可选字段）
         }
     """
     doc = fitz.open(pdf_file)
-    pages = []
 
     try:
+        # 有扫描页且 OCR 可用时走 OCR 提取
+        has_scan = any(is_scanned_page(page) for page in doc)
+        if has_scan:
+            return extract_pdf_pages_with_ocr(doc)
+
+        pages = []
         for i, page in enumerate(doc):
             text = page.get_text("text").strip()
 
@@ -66,7 +73,8 @@ def _load_pdf_markdown(pdf_file: Path) -> list[dict]:
     - 按版面块推断阅读顺序（对双栏课件友好）
 
     Returns:
-        与 _load_pdf_text 相同结构的数据，text 为该页的 Markdown 文本
+        与 _load_pdf_text 相同结构的数据，text 为该页的 Markdown 文本。
+        扫描页（Markdown 为空且无文字层）会补充 OCR 文本。
     """
     try:
         import pymupdf4llm
@@ -102,6 +110,58 @@ def _load_pdf_markdown(pdf_file: Path) -> list[dict]:
                 "source": pdf_file.name,
             }
         )
+
+    # 扫描页在 pymupdf4llm 输出中是空文本，用 OCR 补齐
+    pages = _backfill_scanned_pages_with_ocr(pdf_file, pages)
+
+    return pages
+
+
+def _backfill_scanned_pages_with_ocr(pdf_file: Path, pages: list[dict]) -> list[dict]:
+    """
+    对 markdown 后端输出中的扫描页做 OCR 补齐。
+
+    markdown 后端无法按页判断扫描页（输出只有文本），这里重新打开
+    文档按页码对齐检测，仅对扫描页执行 OCR。
+    """
+    from modules.ocr_router import OCR_ENABLED, ocr_page
+
+    if not OCR_ENABLED:
+        return pages
+
+    doc = fitz.open(pdf_file)
+    try:
+        scanned_page_nos = [
+            page.number + 1 for page in doc if is_scanned_page(page)
+        ]
+    finally:
+        doc.close()
+
+    if not scanned_page_nos:
+        return pages
+
+    print(f"[OCR] {pdf_file.name} 检测到 {len(scanned_page_nos)} 个扫描页，尝试 OCR 补齐")
+
+    doc = fitz.open(pdf_file)
+    try:
+        for page_data in pages:
+            if page_data["page"] not in scanned_page_nos:
+                continue
+
+            try:
+                ocr_text = ocr_page(doc[page_data["page"] - 1])
+            except (ImportError, ValueError) as e:
+                print(f"[警告] OCR 不可用，第 {page_data['page']} 页保持为空：{e}")
+                continue
+            except Exception as e:
+                print(f"[警告] 第 {page_data['page']} 页 OCR 失败：{e}")
+                continue
+
+            if ocr_text:
+                page_data["text"] = ocr_text
+                page_data["ocr"] = True
+    finally:
+        doc.close()
 
     return pages
 

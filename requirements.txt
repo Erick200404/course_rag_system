@@ -5,8 +5,6 @@ fastapi
 uvicorn
 faiss-cpu
 chromadb
-langchain
-langchain-community
 sentence-transformers
 python-dotenv
 openai
@@ -14,6 +12,18 @@ rank-bm25
 jieba
 requests
 pydantic
+
+# LLM 编排（LCEL）
+langchain
+langchain-openai
+langchain-ollama
+
+# 多格式文档解析
+python-docx
+python-pptx
+
+# 扫描页 OCR（可选，未安装时扫描页自动跳过）
+rapidocr-onnxruntime
 
 # 开发 / 测试
 pytest
