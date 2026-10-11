@@ -31,6 +31,28 @@ def upload(client, course, name="课件.txt", body=b"course content"):
     return client.put(f"/courses/{course['id']}/documents/{name}", content=body)
 
 
+@pytest.mark.parametrize("status", [503, 504])
+def test_model_service_failure_returns_detail_without_saving_turn(workspace_env, monkeypatch, status):
+    from modules.llm_backends import ModelServiceError
+
+    client = workspace_env
+    course, session = create(client)
+    upload(client, course)
+    monkeypatch.setattr(api_main, "build_rag_pipeline",
+                        lambda paths, course_id=None: (None, [], course_id, "retriever"))
+    monkeypatch.setattr(api_main, "RAG_FLOW", "crag")
+
+    def fail(**kwargs):
+        raise ModelServiceError("无法连接 Ollama，请启动服务", status)
+
+    monkeypatch.setattr(api_main, "run_crag", fail)
+    response = client.post("/chat", json={"session_id": session["id"], "question": "问题"})
+    assert response.status_code == status
+    assert "Ollama" in response.json()["detail"]
+    assert client.get(f"/sessions/{session['id']}").json()["turns"] == []
+    assert client.get(f"/courses/{course['id']}/documents").json()
+
+
 def test_same_name_documents_are_isolated_and_survive_reopen(workspace_env):
     client = workspace_env
     first, _ = create(client, "机器学习")

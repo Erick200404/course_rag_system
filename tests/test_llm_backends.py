@@ -5,6 +5,7 @@ llm_backends 单元测试：LCEL 链的组装与调用。
 """
 
 import pytest
+import httpx
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
@@ -132,3 +133,30 @@ def test_generate_answer_uses_lcel_chain(monkeypatch):
 
     assert result["answer"].startswith("这是基于资料生成的答案")
     assert result["retrieved_chunks"][0]["source"] == "lecture.pdf"
+
+
+@pytest.mark.parametrize("stage", ["generate", "grade", "rewrite"])
+@pytest.mark.parametrize("timeout", [False, True])
+def test_all_llm_stages_report_service_failures(monkeypatch, stage, timeout):
+    import modules.rag_graph as graph
+
+    class UnavailableModel(FakeListChatModel):
+        def _call(self, *args, **kwargs):
+            if timeout:
+                raise httpx.ReadTimeout("slow model")
+            raise httpx.ConnectError("connection refused")
+
+    model = UnavailableModel(responses=["unused"])
+    monkeypatch.setattr(llm_backends, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(graph, "build_chat_model", lambda: model)
+    state = {"question": "问题", "chunks": [
+        {"text": "资料", "source": "lecture.pdf", "page": 1}
+    ]}
+    with pytest.raises(llm_backends.ModelServiceError) as caught:
+        if stage == "generate":
+            invoke_llm("问题", chat_model=model)
+        else:
+            getattr(graph, f"{stage}_node")(state)
+    assert caught.value.status_code == (504 if timeout else 503)
+    assert "Ollama" in str(caught.value)
+    assert caught.value.__cause__ is not None

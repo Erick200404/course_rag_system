@@ -2,6 +2,7 @@
 
 import os
 import hashlib
+import logging
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List
@@ -9,6 +10,7 @@ from threading import RLock
 from contextlib import nullcontext
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import (
@@ -52,6 +54,7 @@ from modules.vector_store import (
 )
 from modules.rag_chain import generate_answer
 from modules.rag_graph import run_crag
+from modules.llm_backends import ModelServiceError
 from modules import workspace_store as workspace
 
 
@@ -61,6 +64,12 @@ app = FastAPI(
     description="课程资料智能问答系统 API",
     version="1.1.0"
 )
+
+
+@app.exception_handler(ModelServiceError)
+async def model_service_error_handler(request: Request, exc: ModelServiceError):
+    logging.getLogger(__name__).error("模型服务调用失败", exc_info=exc)
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
 # ==============================

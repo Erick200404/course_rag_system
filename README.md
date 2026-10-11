@@ -757,6 +757,15 @@ LangGraph `StateGraph` 编排层（crag 模式），只在「存在分支与循�
 
 # 未来优化方向
 
+## 模型服务故障排查与耗时
+
+- `/health` 仅检查 FastAPI 是否在线，不代表 Ollama 或在线模型 API 可用。
+- 使用 `LLM_BACKEND = "ollama"` 时，先确认 Ollama 已运行；连接被拒绝时可运行 `ollama serve`，再用 `ollama list` 检查配置的模型是否已安装。推理期间用 `ollama ps` 查看 CPU/GPU 分配。
+- 模型连接失败返回 HTTP 503 和可读的 `detail`；推理超时返回 HTTP 504。生成、CRAG 相关性判断和查询改写均使用这一错误边界，失败请求不写入会话问答记录。
+- 首次提问可能包含 PDF/OCR 解析、图片描述、模型加载和索引构建；后续缓存命中时通常省去建库工作。OCR、BM25 等环节仍可能使用 CPU，embedding/reranker 的 CUDA 使用情况以终端日志为准。
+- CRAG 通常先判断相关性再生成答案，不相关时还会改写和重新检索。`RAG_FLOW = "simple"` 可减少模型调用，但会关闭这套自纠错流程。
+- 改为 `LLM_BACKEND = "api"` 只切换文字大模型；图片描述仍由 `VLM_BASE_URL` 指向的 Ollama 服务处理，embedding 由 `EMBEDDING_BACKEND` 单独控制，reranker 仍在本地运行。切换配置后重启后端。
+
 未来可以继续优化：
 
 - 语义级文本切分

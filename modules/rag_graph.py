@@ -20,7 +20,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import END, StateGraph
 
 from config import MAX_HISTORY_TURNS, MAX_RETRIEVE_RETRIES
-from modules.llm_backends import build_chat_model
+from modules.llm_backends import build_chat_model, invoke_chain
 from modules.reranker import rerank_chunks
 
 # 相关性评分提示词：让模型只输出 relevant / irrelevant
@@ -126,7 +126,7 @@ def grade_node(state: RagState) -> Dict[str, Any]:
 
     chain = GRADER_PROMPT | build_chat_model() | StrOutputParser()
 
-    verdict = chain.invoke(
+    verdict = invoke_chain(chain,
         {
             "question": state["question"],
             "context": _build_context(chunks),
@@ -140,7 +140,7 @@ def rewrite_node(state: RagState) -> Dict[str, Any]:
     """查询改写节点：结合历史把问题改写成可独立检索的形式。"""
     chain = REWRITE_PROMPT | build_chat_model() | StrOutputParser()
 
-    rewritten = chain.invoke(
+    rewritten = invoke_chain(chain,
         {
             "history": _format_history(state.get("history")),
             "question": state["question"],

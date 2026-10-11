@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+from openai import APIConnectionError, APITimeoutError
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -40,6 +43,31 @@ _PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
 )
 
 
+class ModelServiceError(RuntimeError):
+    """可向页面展示的模型服务异常，保留底层异常供终端诊断。"""
+
+    def __init__(self, message: str, status_code: int = 503):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def invoke_chain(chain: Any, inputs: dict) -> str:
+    """生成、相关性判断和查询改写共用的调用边界。"""
+    service = (f"Ollama（{OLLAMA_BASE_URL}）" if LLM_BACKEND == "ollama"
+               else "在线模型 API")
+    try:
+        return chain.invoke(inputs)
+    except (httpx.TimeoutException, APITimeoutError) as exc:
+        raise ModelServiceError(
+            f"{service}响应超时，请检查服务负载、网络或模型超时配置。", 504
+        ) from exc
+    except (httpx.ConnectError, APIConnectionError) as exc:
+        advice = ("请启动 Ollama 服务（ollama serve）并检查 OLLAMA_BASE_URL。"
+                  if LLM_BACKEND == "ollama" else
+                  "请检查 ZHI_BASE_URL、网络及 API 服务状态。")
+        raise ModelServiceError(f"无法连接{service}。{advice}") from exc
+
+
 def build_chat_model() -> BaseChatModel:
     """
     根据配置构造 LangChain chat model。
@@ -54,7 +82,7 @@ def build_chat_model() -> BaseChatModel:
 
         api_key = os.getenv("ZHI_API_KEY")
         if not api_key:
-            raise RuntimeError("未配置 ZHI_API_KEY，无法使用 API LLM 后端")
+            raise ModelServiceError("未配置 ZHI_API_KEY，无法使用 API LLM 后端")
 
         return ChatOpenAI(
             model=CHAT_MODEL,
@@ -101,4 +129,4 @@ def invoke_llm(prompt: str, chat_model: BaseChatModel | None = None) -> str:
     """
     chain = build_answer_chain(chat_model)
 
-    return chain.invoke({"prompt": prompt})
+    return invoke_chain(chain, {"prompt": prompt})
