@@ -146,3 +146,51 @@ def test_selected_session_stays_in_url_when_automatic_title_changes(ui_backend, 
     assert not restored.exception
     assert restored.selectbox(key="session").value == session_id
     assert restored.chat_message[-1].markdown[0].value == "新回答"
+
+
+def test_delete_document_updates_ui_and_allows_explicit_reupload(ui_backend, monkeypatch):
+    import streamlit as st
+
+    course, _, session, _ = ui_backend
+    calls = []
+
+    class Upload:
+        name = "课件.txt"
+
+        def getvalue(self):
+            return b"lecture content"
+
+    # Model the old uploader retaining its file, then resetting to a new key.
+    def uploader(*args, key, **kwargs):
+        calls.append(key)
+        return [Upload()] if key.endswith("_0") else []
+
+    monkeypatch.setattr(st, "file_uploader", uploader)
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    assert not app.exception
+    app.button(key="delete_document").click().run()
+    assert not app.exception
+    assert workspace.list_course_documents(course["id"]) == []
+    assert app.multiselect(key=f"documents_{session['id']}").value == []
+    assert app.chat_input[0].disabled
+    assert calls[-1].endswith("_1")
+    digest = __import__("hashlib").sha256(b"lecture content").hexdigest()
+    assert (course["id"], "课件.txt", digest) not in app.session_state["upload_receipts"]
+
+
+def test_delete_current_session_and_course_resets_navigation(ui_backend):
+    course, other, session, _ = ui_backend
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    app.button(key="delete_session").click().run()
+    assert not app.exception
+    assert workspace.list_sessions(course["id"]) == []
+    assert not app.chat_message
+    assert workspace.list_course_documents(course["id"])
+    app.button(key="delete_course").click().run()
+    assert not app.exception
+    assert app.selectbox(key="course").value == other["id"]
+    assert len(workspace.list_courses()) == 1
+    app.button(key="delete_course").click().run()
+    assert not app.exception
+    assert workspace.list_courses() == []
+    assert not app.selectbox

@@ -32,6 +32,7 @@ from modules.doc_registry import (
     file_sha256,
     get_document,
     register_documents,
+    remove_document,
 )
 from modules.document_loader import (
     SUPPORTED_EXTENSIONS,
@@ -182,7 +183,8 @@ def course_sessions(course_id: str):
 
 @app.post("/courses/{course_id}/sessions", status_code=201)
 def add_session(course_id: str, request: SessionCreate):
-    return workspace_call(workspace.create_session, course_id, request.title)
+    with course_lock(course_id):
+        return workspace_call(workspace.create_session, course_id, request.title)
 
 
 @app.get("/sessions/{session_id}")
@@ -203,6 +205,67 @@ def clear_session_history(session_id: str):
     session = workspace_call(workspace.get_session, session_id)
     with course_lock(session["course_id"]):
         workspace.clear_turns(session_id)
+    return {"status": "ok"}
+
+
+def _remove_course_indexes(course_id: str, source: str | None = None):
+    """Remove from every embedding/config collection, not just the active one."""
+    storage = workspace.course_storage_dir(course_id)
+    chroma_path = storage / "chroma"
+    if chroma_path.is_dir():
+        import chromadb
+
+        client = chromadb.PersistentClient(path=str(chroma_path))
+        for collection in client.list_collections():
+            name = collection if isinstance(collection, str) else collection.name
+            if source is None:
+                client.delete_collection(name)
+            else:
+                client.get_collection(name).delete(where={"source": {"$eq": source}})
+    # FAISS is a full-selection cache; discard it and rebuild retained files
+    # on demand. A binary index cannot remove one file's metadata independently.
+    if storage.is_dir():
+        for directory in storage.iterdir():
+            if directory.is_dir() and len(directory.name) == 32 and all(c in "0123456789abcdef" for c in directory.name):
+                workspace.remove_owned_tree(storage, directory)
+    registry = storage / "registry.db"
+    if registry.is_file():
+        if source is None:
+            registry.unlink()
+        else:
+            remove_document(source, db_path=str(registry))
+    _course_stores.pop(course_id, None)
+    for key in list(_retriever_cache):
+        if key.startswith(f"{course_id}:"):
+            _retriever_cache.pop(key, None)
+
+
+@app.delete("/courses/{course_id}/documents/{filename}")
+def delete_document(course_id: str, filename: str):
+    with course_lock(course_id):
+        documents = workspace_call(workspace.list_course_documents, course_id)
+        workspace_call(workspace.validate_filename, filename)
+        if filename not in {document["name"] for document in documents}:
+            raise HTTPException(status_code=404, detail="资料不存在")
+        _remove_course_indexes(course_id, source=filename)
+        workspace_call(workspace.delete_course_document, course_id, filename)
+    return {"status": "ok"}
+
+
+@app.delete("/sessions/{session_id}")
+def remove_session(session_id: str):
+    session = workspace_call(workspace.get_session, session_id)
+    with course_lock(session["course_id"]):
+        workspace_call(workspace.delete_session, session_id)
+    return {"status": "ok"}
+
+
+@app.delete("/courses/{course_id}")
+def remove_course(course_id: str):
+    with course_lock(course_id):
+        workspace_call(workspace.get_course, course_id)
+        _remove_course_indexes(course_id)
+        workspace_call(workspace.delete_course, course_id)
     return {"status": "ok"}
 
 

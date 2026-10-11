@@ -2,6 +2,7 @@
 
 import hashlib
 from pathlib import Path
+from urllib.parse import quote
 
 import streamlit as st
 
@@ -34,6 +35,22 @@ st.html("""
 """)
 
 st.session_state.setdefault("upload_receipts", set())
+reset = st.session_state.pop("pending_navigation_reset", None)
+if reset:
+    for key in (("course", "session") if reset == "course" else ("session",)):
+        st.session_state.pop(key, None)
+        st.query_params.pop(key, None)
+deleted = st.session_state.pop("pending_deleted_document", None)
+if deleted:
+    deleted_course, deleted_name, affected_sessions = deleted
+    st.session_state.upload_receipts = {
+        receipt for receipt in st.session_state.upload_receipts
+        if not (receipt[0] == deleted_course and receipt[1] == deleted_name)
+    }
+    for affected in affected_sessions:
+        key = f"documents_{affected}"
+        if key in st.session_state:
+            st.session_state[key] = [name for name in st.session_state[key] if name != deleted_name]
 # Native selectbox URL binding serializes format_func's display labels.
 # Course names may repeat and session titles change after the first answer,
 # so route this app with immutable IDs instead of mutable display labels.
@@ -78,6 +95,8 @@ def render_evidence(result: dict):
                 if item.get("heading"):
                     location += f" · {item['heading']}"
                 st.caption(location)
+                if item.get("source_deleted"):
+                    st.caption("资料已删除 · 以下为历史引用快照，不参与新的检索")
                 st.text(item.get("text", ""))
                 image = item.get("image_path")
                 if image and Path(image).is_file():
@@ -132,6 +151,14 @@ with st.sidebar:
                 st.session_state.pop("session", None)
                 st.rerun()
 
+    if course_id:
+        with st.popover("管理课程", icon=":material/folder:", width="stretch"):
+            st.caption(f"删除「{course_labels[course_id]}」将移除全部资料、索引和问答会话。")
+            if st.button("确认删除当前课程", key="delete_course", width="stretch"):
+                fetch("DELETE", f"/courses/{course_id}")
+                st.session_state.pending_navigation_reset = "course"
+                st.rerun()
+
 if course_id is None:
     st.space("large")
     st.title("为每门课，留一张学习桌", text_alignment="center")
@@ -175,7 +202,8 @@ with st.sidebar:
     st.caption("课程资料")
     uploaded = st.file_uploader(
         "添加资料", type=[ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS],
-        accept_multiple_files=True, key=f"uploads_{course_id}",
+        accept_multiple_files=True,
+        key=f"uploads_{course_id}_{st.session_state.get(f'upload_generation_{course_id}', 0)}",
         help="上传后立即保存到当前课程。同名文件会更新；首次提问时建立检索索引。",
     )
     changed = False
@@ -196,6 +224,17 @@ with st.sidebar:
     if changed:
         st.rerun()
     st.caption(f"已保存 {len(documents)} 份资料 · 再次打开无需重传")
+    if documents:
+        with st.popover("管理已上传资料", icon=":material/description:", width="stretch"):
+            to_delete = st.selectbox("要删除的资料", [doc["name"] for doc in documents],
+                                     key=f"delete_document_name_{course_id}")
+            st.caption("删除后所有会话都无法再检索此资料。历史回答保留，引用会标记资料已删除。")
+            if st.button("确认删除所选资料", key="delete_document", width="stretch"):
+                fetch("DELETE", f"/courses/{course_id}/documents/{quote(to_delete, safe='')}")
+                st.session_state.pending_deleted_document = (course_id, to_delete, session_ids)
+                generation = f"upload_generation_{course_id}"
+                st.session_state[generation] = st.session_state.get(generation, 0) + 1
+                st.rerun()
 
 session = fetch("GET", f"/sessions/{session_id}") if session_id else None
 doc_names = [doc["name"] for doc in documents]
@@ -219,10 +258,15 @@ with st.sidebar:
         show_history = st.checkbox("显示完整对话", value=True)
         top_k = st.slider("参考片段数量", 1, 10, min(RERANK_TOP_K, 10))
     if session:
-        with st.popover("清空当前会话", icon=":material/delete:", width="stretch"):
+        with st.popover("管理当前会话", icon=":material/more_horiz:", width="stretch"):
             st.caption("仅删除当前会话的问答记录，课程资料会保留。")
             if st.button("确认清空", key="clear_turns", width="stretch"):
                 fetch("DELETE", f"/sessions/{session_id}/turns")
+                st.rerun()
+            st.caption("删除会话会移除该会话及历史记录，课程资料保留。")
+            if st.button("确认删除当前会话", key="delete_session", width="stretch"):
+                fetch("DELETE", f"/sessions/{session_id}")
+                st.session_state.pending_navigation_reset = "session"
                 st.rerun()
 
 st.caption(f"{course['name']} / {session['title'] if session else '课程资料库'}")

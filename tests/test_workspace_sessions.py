@@ -153,3 +153,90 @@ def test_identical_content_different_names_respects_selected_sources(workspace_e
     view, metadata, _, _ = api_main.build_rag_pipeline(paths[:1], course["id"])
     assert {chunk["source"] for chunk in metadata} == {"a.md"}
     assert {chunk["source"] for chunk in view.search([1., 0., 0.], 5)} == {"a.md"}
+
+
+def test_delete_document_prunes_selections_preserves_history_and_other_courses(workspace_env):
+    client = workspace_env
+    course, session = create(client)
+    other, _ = create(client, "另一门课程")
+    upload(client, course, "a.txt")
+    upload(client, course, "b.txt")
+    upload(client, other, "a.txt")
+    workspace.select_session_documents(session["id"], ["a.txt", "b.txt"])
+    workspace.append_turn(session["id"], "历史问题", {
+        "answer": "历史答案", "retrieved_chunks": [
+            {"source": "a.txt", "text": "引用快照", "image_path": "/cached/image.png"}]})
+    original = Path(workspace.resolve_documents(course["id"], ["a.txt"])[0])
+    assert client.delete(f"/courses/{course['id']}/documents/a.txt").status_code == 200
+    assert not original.exists()
+    restored = workspace.get_session(session["id"])
+    assert restored["selected_documents"] == ["b.txt"]
+    assert restored["turns"][0]["result"]["answer"] == "历史答案"
+    chunk = restored["turns"][0]["result"]["retrieved_chunks"][0]
+    assert chunk["source_deleted"]
+    assert "image_path" not in chunk
+    assert workspace.resolve_documents(other["id"], ["a.txt"])
+    assert client.delete(f"/courses/{course['id']}/documents/a.txt").status_code == 404
+
+
+def test_deleting_session_and_last_course_removes_records_and_files(workspace_env):
+    client = workspace_env
+    course, first = create(client)
+    second = client.post(f"/courses/{course['id']}/sessions", json={}).json()
+    upload(client, course)
+    workspace.append_turn(first["id"], "问题", {"answer": "答案"})
+    assert client.delete(f"/sessions/{first['id']}").status_code == 200
+    assert client.get(f"/sessions/{first['id']}").status_code == 404
+    assert client.get(f"/sessions/{second['id']}").status_code == 200
+    assert workspace.list_course_documents(course["id"])
+    directory = workspace.COURSE_DATA_ROOT / course["id"]
+    assert client.delete(f"/courses/{course['id']}").status_code == 200
+    assert not directory.exists()
+    assert client.get("/courses").json() == []
+    assert client.get(f"/sessions/{second['id']}").status_code == 404
+    assert client.delete(f"/courses/{course['id']}").status_code == 404
+
+
+def test_delete_cleans_all_chroma_configs_faiss_and_retriever_cache(workspace_env, monkeypatch):
+    from modules.doc_registry import get_document
+
+    course, session = create(workspace_env)
+    for name in ("a.md", "b.md"):
+        upload(workspace_env, course, name,
+               f"# {name}\n\n课程内容介绍检索增强生成技术的基本原理、向量数据库的构建方法以及系统设计。".encode())
+    monkeypatch.setenv("ANONYMIZED_TELEMETRY", "False")
+    monkeypatch.setattr(api_main, "embed_chunks", lambda chunks: [
+        {**chunk, "embedding": [1., 0., 0.]} for chunk in chunks])
+    paths = workspace.resolve_documents(course["id"], ["a.md", "b.md"])
+    _, _, cache_key, _ = api_main.build_rag_pipeline(paths, course["id"])
+    store = api_main._get_chroma_store(course["id"])
+    client = store._client
+    old_collection = client.get_or_create_collection("older_embedding_config")
+    old_collection.upsert(ids=["old-a"], documents=["old chunk"], embeddings=[[1., 0., 0.]],
+                          metadatas=[{"source": "a.md", "doc_hash": "old"}])
+    storage = workspace.course_storage_dir(course["id"])
+    faiss = storage / ("f" * 32)
+    faiss.mkdir()
+    (faiss / "faiss_index.bin").write_bytes(b"old index")
+    assert cache_key in api_main._retriever_cache
+    assert workspace_env.delete(f"/courses/{course['id']}/documents/a.md").status_code == 200
+    assert store.collection.get(where={"source": "a.md"})["ids"] == []
+    assert old_collection.get()["ids"] == []
+    assert store.collection.get(where={"source": "b.md"})["ids"]
+    assert not faiss.exists()
+    assert cache_key not in api_main._retriever_cache
+    assert get_document("a.md", db_path=str(storage / "registry.db")) is None
+    assert workspace_env.delete(f"/courses/{course['id']}").status_code == 200
+    assert client.list_collections() == []
+
+
+def test_recursive_cleanup_rejects_paths_outside_owned_root(tmp_path):
+    root = tmp_path / "owned"
+    root.mkdir()
+    outside = tmp_path / "other"
+    outside.mkdir()
+    with pytest.raises(ValueError):
+        workspace.remove_owned_tree(root, outside)
+    with pytest.raises(ValueError):
+        workspace.remove_owned_tree(root, root)
+    assert outside.is_dir()

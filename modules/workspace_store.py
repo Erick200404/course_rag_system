@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import tempfile
 import time
 from uuid import uuid4
@@ -205,4 +206,65 @@ def clear_turns(session_id: str) -> None:
     with database() as db:
         _required(db, "sessions", session_id)
         db.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+
+
+def remove_owned_tree(root: Path, target: Path) -> None:
+    """Delete only a verified child directory; never traverse a linked target."""
+    resolved_root, resolved_target = root.resolve(), target.resolve()
+    if target.is_symlink() or resolved_target == resolved_root or not resolved_target.is_relative_to(resolved_root):
+        raise ValueError("删除路径超出课程存储范围")
+    if target.exists():
+        shutil.rmtree(resolved_target)
+
+
+def delete_course_document(course_id: str, name: str) -> None:
+    get_course(course_id)
+    validate_filename(name)
+    with database() as db:
+        document = db.execute("SELECT name FROM course_documents WHERE course_id = ? AND name = ?",
+                              (course_id, name)).fetchone()
+        if not document:
+            raise LookupError("资料不存在")
+        directory = COURSE_DATA_ROOT / course_id
+        path = directory / name
+        if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
+            raise ValueError("删除路径超出课程存储范围")
+        path.unlink(missing_ok=True)
+        db.execute("DELETE FROM course_documents WHERE course_id = ? AND name = ?", (course_id, name))
+        for row in db.execute("SELECT id, selected_documents FROM sessions WHERE course_id = ?", (course_id,)):
+            if row["selected_documents"] is not None:
+                selected = [item for item in json.loads(row["selected_documents"]) if item != name]
+                db.execute("UPDATE sessions SET selected_documents = ? WHERE id = ?",
+                           (json.dumps(selected, ensure_ascii=False), row["id"]))
+        # Preserve historical answers, but mark removed evidence and stop showing
+        # its cached images. A later file with the same name is a new document.
+        for row in db.execute("""SELECT turns.id, turns.result FROM turns JOIN sessions
+                                ON turns.session_id = sessions.id WHERE sessions.course_id = ?""", (course_id,)):
+            result = json.loads(row["result"])
+            changed = False
+            for chunk in result.get("retrieved_chunks", []):
+                if chunk.get("source") == name:
+                    chunk["source_deleted"] = True
+                    chunk.pop("image_path", None)
+                    changed = True
+            if changed:
+                db.execute("UPDATE turns SET result = ? WHERE id = ?",
+                           (json.dumps(result, ensure_ascii=False), row["id"]))
+
+
+def delete_session(session_id: str) -> None:
+    with database() as db:
+        _required(db, "sessions", session_id)
+        db.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+        db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
+def delete_course(course_id: str) -> None:
+    get_course(course_id)
+    remove_owned_tree(COURSE_DATA_ROOT, COURSE_DATA_ROOT / course_id)
+    with database() as db:
+        db.execute("DELETE FROM turns WHERE session_id IN (SELECT id FROM sessions WHERE course_id = ?)", (course_id,))
+        db.execute("DELETE FROM sessions WHERE course_id = ?", (course_id,))
+        db.execute("DELETE FROM course_documents WHERE course_id = ?", (course_id,))
+        db.execute("DELETE FROM courses WHERE id = ?", (course_id,))
 
